@@ -24,7 +24,32 @@ GLOBAL_STATES = (
     "lane_linear.STOCK_ROWS",
     "lane_linear._SUM_POLICY",
     "lane_linear._SUM_REUSE",
+    "mtp_lane._STATE",
+    "tf_hc_forward._STATE",
+    "dflash_apc_window._STATE",
+    "dflash_apc_window._STATS",
+    "replay._STATS",
+    "attn_prefill._STATE",
+    "ple_parallel._STATE",
+    "qwen4_gdn._STATE",
+    "omlx.qwen35_verify_qmm.group_sums",
+    "omlx_q4.qwen35_verify_qmm.group_sums",
 )
+# module files whose module-level _STATE / _STATS must each appear in GLOBAL_STATES
+STATE_SOURCES = (
+    "kernels/ragged_kv.py",
+    "kernels/batch_invariant.py",
+    "kernels/gdn_prefill.py",
+    "kernels/lane_linear.py",
+    "mtp_lane.py",
+    "kernels/tf_hc_forward.py",
+    "dflash_apc_window.py",
+    "round_driver/replay.py",
+    "kernels/attn_prefill.py",
+    "ple_parallel.py",
+    "kernels/qwen4_gdn.py",
+)
+STATE_SUFFIXES = ("_STATE", "_STATS")
 
 
 def digest(payload):
@@ -36,13 +61,21 @@ def digest(payload):
 
 
 def global_state():
+    from yunshu_engine import dflash_apc_window, mtp_lane, ple_parallel
     from yunshu_engine.kernels import (
+        attn_prefill,
         batch_invariant,
         gdn_prefill,
         lane_linear,
+        qwen4_gdn,
         ragged_kv,
+        tf_hc_forward,
     )
+    from yunshu_engine.kernels.omlx import qwen35_verify_qmm as omlx_q35
+    from yunshu_engine.kernels.omlx_q4 import qwen35_verify_qmm as omlx_q4
+    from yunshu_engine.round_driver import replay
 
+    # counters and cache contents move by design; only mode flags and key sets are pinned
     return {
         "ragged_kv._STATE": dict(ragged_kv._STATE),
         "batch_invariant._STATE": dict(batch_invariant._STATE),
@@ -52,7 +85,76 @@ def global_state():
         "lane_linear.STOCK_ROWS": lane_linear.STOCK_ROWS,
         "lane_linear._SUM_POLICY": lane_linear._SUM_POLICY,
         "lane_linear._SUM_REUSE": lane_linear._SUM_REUSE,
+        "mtp_lane._STATE": {
+            "enabled": mtp_lane._STATE["enabled"],
+            "window": mtp_lane._STATE["window"],
+            "copy_rows": mtp_lane._STATE["copy_rows"],
+            "profile_on": mtp_lane._STATE["profile"] is not None,
+            "guide_set": mtp_lane._STATE["guide"] is not None,
+            "context_set": mtp_lane._STATE["context"] is not None,
+        },
+        # "modules" is a plan cache keyed by id(module); its contents are not pinned
+        "tf_hc_forward._STATE": {
+            "installed": tf_hc_forward._STATE["installed"],
+            "moe": tf_hc_forward._STATE["moe"],
+            "original_set": tf_hc_forward._STATE["original"] is not None,
+            "gdn_original_set": tf_hc_forward._STATE["gdn_original"] is not None,
+        },
+        "dflash_apc_window._STATE": {
+            "budget": dflash_apc_window._STATE["budget"],
+            "decode_tail_set": "decode_tail" in dflash_apc_window._STATE,
+        },
+        "dflash_apc_window._STATS": sorted(dflash_apc_window._STATS),
+        "replay._STATS": sorted(replay._STATS),
+        "attn_prefill._STATE": {
+            "installed": attn_prefill._STATE["installed"],
+            "enabled": attn_prefill._STATE["enabled"],
+        },
+        "ple_parallel._STATE": {
+            "installed": ple_parallel._STATE["installed"],
+            "threads": ple_parallel._STATE["threads"],
+            "original_set": ple_parallel._STATE["original"] is not None,
+        },
+        "qwen4_gdn._STATE": sorted(qwen4_gdn._STATE),
+        # the verify group-sum table is thread-local and cleared per step; only its size is pinned
+        "omlx.qwen35_verify_qmm.group_sums": len(
+            getattr(omlx_q35._ROUTE_ARMED, "sums", None) or {}
+        ),
+        "omlx_q4.qwen35_verify_qmm.group_sums": len(
+            getattr(omlx_q4._ROUTE_ARMED, "sums", None) or {}
+        ),
     }
+
+
+def state_globals(path):
+    """Names of module-level _STATE / _STATS bindings in one source file (AST, no import)."""
+    import ast
+
+    tree = ast.parse(Path(path).read_text())
+    names = set()
+    for node in tree.body:
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id.endswith(STATE_SUFFIXES):
+                names.add(t.id)
+    return names
+
+
+def unregistered_state(root, sources=STATE_SOURCES, registry=GLOBAL_STATES):
+    """Keys '<module>.<name>' of module-level state that the registry does not pin."""
+    missing = set()
+    for rel in sources:
+        path = Path(root) / rel
+        stem = path.stem
+        for name in state_globals(path):
+            key = f"{stem}.{name}"
+            if key not in registry:
+                missing.add(key)
+    return sorted(missing)
 
 
 def assert_globals(expected):

@@ -1,14 +1,20 @@
 """Fail-closed golden validation without MLX or a checkpoint."""
 
 import copy
+from pathlib import Path
 
 import pytest
 from scripts.research.round_driver_golden import (
     GLOBAL_STATES,
+    STATE_SOURCES,
     compare,
     digest,
+    state_globals,
+    unregistered_state,
     validate,
 )
+
+ENGINE = Path(__file__).resolve().parents[2] / "python" / "yunshu_engine"
 
 
 def receipt():
@@ -383,3 +389,36 @@ def test_checkpoint_build_runs_the_served_kernel_install(tmp_path, monkeypatch):
     assert built[0] is wrapper and built[4] == {"split_prefill": "split64-v1"}
     assert seen["model"] is wrapper and seen["draft_kind"] == "mtp"
     assert seen["config"]["model_type"] == "qwen3_5"
+
+
+def test_every_module_state_global_is_registered():
+    assert unregistered_state(ENGINE) == []
+
+
+def test_new_module_state_global_is_reported(tmp_path):
+    (tmp_path / "fixture.py").write_text("_NEW_STATE: dict = {}\n_STATS = {}\n")
+    registry = ("fixture._STATS",)
+    assert unregistered_state(tmp_path, ("fixture.py",), registry) == [
+        "fixture._NEW_STATE"
+    ]
+
+
+def test_registered_state_names_exist_in_their_module():
+    stems = {Path(rel).stem for rel in STATE_SOURCES}
+    found = {
+        f"{Path(rel).stem}.{name}"
+        for rel in STATE_SOURCES
+        for name in state_globals(ENGINE / rel)
+    }
+    for key in GLOBAL_STATES:
+        if key.split(".")[0] in stems and key.endswith(("._STATE", "._STATS")):
+            assert key in found, key
+
+
+def test_global_state_snapshot_matches_registry_and_is_json_safe():
+    pytest.importorskip("mlx.core")
+    from scripts.research import round_driver_golden as golden
+
+    snap = golden.global_state()
+    assert set(snap) == set(GLOBAL_STATES)
+    digest(snap)
