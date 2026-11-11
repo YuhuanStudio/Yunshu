@@ -48,7 +48,7 @@ from typing import Any, cast
 import mlx.core as mx
 import numpy as np
 
-from .. import fn_ttft, hit_stages, keyed_sampling
+from .. import fn_ttft, hit_stages, keyed_sampling, ple_prefetch
 from ..cache_prefill import reserve_prompt_kv
 from ..constraint_eos import GrammarDeadEndError
 from ..kernels import preempt
@@ -1527,6 +1527,22 @@ class RoundDriver:
             return "grid+checkpoint" if on_grid else "checkpoint-cut"
         return "grid" if on_grid else "other"
 
+    def _ple_lookahead(self, pf, items: list, budget: int) -> None:
+        """Start reading the PLE rows of the spans this prompt prefills next (a wrong guess costs
+        a synchronous read of the missed rows, never a different value)."""
+        last = items[-1]
+        row, ids = last.row, last.row.req.ids
+        if last.seg is None or row.done >= len(ids):
+            pf.cancel()
+            return
+        start = row.done
+        for _ in range(ple_prefetch.MAX_PENDING):
+            if start >= len(ids):
+                break
+            end = self._run_end(row, start, max(budget, self.chunk))
+            pf.submit_span(ids, start, end)
+            start = end
+
     def _log_spans(self, items: list, span_t: list, wait_s: float) -> None:
         """One INFO line per Flash-Next prompt span of a request that is not already cached: where it
         starts and ends, why it was cut, the host time spent building its graph and the step's eval
@@ -1640,6 +1656,9 @@ class RoundDriver:
             captures = list(entry.captures)
         else:
             ev = self._preempt_event(items)
+            # Flash-Next spans read their PLE rows from SSD: the following spans' rows are read on a
+            # background thread while this step runs on the GPU (None when the table is in memory)
+            pf = ple_prefetch.attach(self.lm) if self.flash else None
             try:
                 with preempt.scope(ev) if ev is not None else contextlib.nullcontext():
                     # Every segment runs the engine's own prefill forward (nax matmul, prefill
@@ -1655,6 +1674,8 @@ class RoundDriver:
                         if it.seg is None:
                             continue
                         reserve_prompt_kv(it.row.cache, len(it.row.req.ids))
+                        if pf is not None:
+                            pf.begin(len(it.row.req.ids), it.start, it.end)
                         got: list[mx.array] = []
                         if self.generic:
                             # the model's own call: logits only for the span that ends the prompt
@@ -1693,6 +1714,8 @@ class RoundDriver:
                                     self._logits(h[offset : offset + 32]),
                                 )
                         per_seg.append(got)
+                    if pf is not None:
+                        self._ple_lookahead(pf, items, budget)
                     span_t.append(time.perf_counter())
                     if self.generic:
                         # rows of ``hidden`` are the logits of the prompts finished this step: an item
@@ -1715,6 +1738,8 @@ class RoundDriver:
                             for layer in range(len(per_seg[0]))
                         ]
             except preempt.PreemptedError as stop:
+                if pf is not None:
+                    pf.cancel()
                 return self._preempted(items, stop)
         tm.mark("submit")
         # hidden is None on a generic-layer step where no prompt ends (_draw then picks nothing)
