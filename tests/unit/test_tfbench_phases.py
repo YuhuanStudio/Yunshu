@@ -113,10 +113,12 @@ def test_followup_speed_cell_ignores_eos_identity_cell_does_not(
 
     monkeypatch.setattr(m, "send", send)
     monkeypatch.setattr(m, "prompt_file_sha256", lambda *_a, **_k: "0" * 64)
-    monkeypatch.setattr(m, "decode_prompt", lambda *_a: "material")
+    monkeypatch.setattr(m, "decode_prompt", lambda *_a, **_k: "material")
+    monkeypatch.setattr(m.pl, "load_tokenizer", lambda _model: None)
     monkeypatch.setattr(m, "check_rehearsal_engaged", lambda *_a: None)
     monkeypatch.setattr(m, "emit", lambda *_a, **_k: None)
     a = SimpleNamespace(
+        model="/models/served",
         phases="cold,turn2",
         decode_tokens=64,
         turn2_tokens=32,
