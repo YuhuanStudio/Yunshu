@@ -176,6 +176,10 @@ def install(arm: str, arch: str = "qwen4") -> None:
     elif arm == "cand":
         pass  # the candidate's own flags arrive through the environment
 
+    if os.environ.get("KLD_DECODE"):
+        install_decode(arm, expect_file, outdir, ref_calls)
+        return  # decode capture replaces the prefill hooks: the prompt phase is not recorded
+
     lm_call = l4.LanguageModel.__call__
 
     def language_model_call(self, *args, **kwargs):
@@ -279,6 +283,163 @@ def install(arm: str, arch: str = "qwen4") -> None:
     install_driver(state, record, write_window, reset, expect_file)
 
 
+def topk_record(logits, forced_next: int | None = None):
+    """Top-K ids / logprobs of one logits row ``[1, V]`` and the logprob of ``forced_next`` (NaN: none)."""
+    import mlx.core as mx
+
+    lg = logits.reshape(1, -1).astype(mx.float32)
+    lse = mx.logsumexp(lg, axis=-1, keepdims=True)
+    vocab = lg.shape[-1]
+    idx = mx.argpartition(lg, kth=vocab - K, axis=-1)[:, vocab - K :]
+    vals = mx.take_along_axis(lg, idx, axis=-1)
+    order = mx.argsort(-vals, axis=-1)
+    idx = mx.take_along_axis(idx, order, axis=-1)
+    vals = mx.take_along_axis(vals, order, axis=-1)
+    lp = vals - lse
+    chosen = (
+        lg[0, forced_next] - lse[0, 0]
+        if forced_next is not None
+        else lse[0, 0] * mx.nan
+    )
+    mx.eval(idx, lp, chosen)
+    return idx[0].astype(mx.int32), lp[0], float(chosen.item())
+
+
+def reference_decode_attend(
+    queries, keys, values, lengths, scale, slots, ref_calls=None
+):
+    """Dense fp32 attention for the decode window: token t of a row sees its first ``length - T + t + 1`` keys."""
+    import mlx.core as mx
+
+    T = int(queries.shape[2])
+    span = int(lengths.max().item())
+    ks = mx.take(keys, slots, axis=0)[..., :span, :].astype(mx.float32)
+    vs = mx.take(values, slots, axis=0)[..., :span, :].astype(mx.float32)
+    visible = lengths[:, None] - T + mx.arange(T)[None, :] + 1  # [B, T]
+    mask = mx.arange(span)[None, None, :] < visible[:, :, None]
+    out = mx.fast.scaled_dot_product_attention(
+        queries.astype(mx.float32), ks, vs, scale=scale, mask=mask[:, None, :, :]
+    )
+    if ref_calls is not None:
+        ref_calls[0] += 1
+    return out.astype(queries.dtype)
+
+
+class DecodeTap:
+    """Teacher-forced decode capture: the window's forced tokens replace every draw, and the logits of each
+    single-token decode step are recorded. A step that is not one row at one position (a speculative
+    window, a second request) marks the window bad: nothing is written and the run fails closed."""
+
+    def __init__(self, expect_file: Path, outdir: Path, ref_calls: list[int]):
+        self.expect_file, self.outdir, self.ref_calls = expect_file, outdir, ref_calls
+        self.reset()
+
+    def reset(self) -> None:
+        self.wid: str | None = None
+        self.forced: list[int] = []
+        self.drawn = 0
+        self.ids: list = []
+        self.lp: list = []
+        self.next_lp: list[float] = []
+        self.tokens: list[int] = []
+        self.bad = ""
+
+    def _arm(self) -> bool:
+        if not self.expect_file.exists():
+            return False
+        if self.wid is None:
+            doc = json.loads(self.expect_file.read_text())
+            self.wid, self.forced = doc["wid"], [int(t) for t in doc["forced"]]
+        return True
+
+    def on_draw(self, kinds: list[str], logits, tokens):
+        """One ``_draw`` call: returns the token array to use in place of the sampled one."""
+        import mlx.core as mx
+
+        if not self._arm() or self.bad:
+            return tokens
+        if kinds != ["p"] and kinds != ["d"]:
+            self.bad = f"draw of {kinds} is not one row at one position"
+            return tokens
+        if logits is None or logits.size != logits.shape[-1] or int(tokens.size) != 1:
+            self.bad = "decode window wider than one token (speculative decode on?)"
+            return tokens
+        i = self.drawn
+        if i >= len(self.forced):
+            return tokens
+        if kinds == ["d"]:
+            if i == 0:
+                self.bad = "decode step before the prompt's first draw"
+                return tokens
+            ids, lp, nxt = topk_record(logits, self.forced[i])
+            self.ids.append(ids)
+            self.lp.append(lp)
+            self.next_lp.append(nxt)
+            self.tokens.append(self.forced[i - 1])
+        self.drawn += 1
+        out = mx.array([self.forced[i]], dtype=mx.int32)
+        if len(self.tokens) == len(self.forced) - 1:
+            self.write()  # resets the tap
+        return out
+
+    def write(self) -> None:
+        import numpy as np
+
+        tmp = self.outdir / f"{self.wid}.tmp.npz"
+        np.savez(
+            tmp,
+            ids=np.stack([np.array(a) for a in self.ids]).astype(np.int32),
+            lp=np.stack([np.array(a) for a in self.lp]).astype(np.float32),
+            next_lp=np.array(self.next_lp, dtype=np.float32),
+            tokens=np.array(self.tokens, dtype=np.int32),
+            ref_calls=np.int64(self.ref_calls[0]),
+        )
+        self.ref_calls[0] = 0
+        tmp.rename(self.outdir / f"{self.wid}.npz")
+        self.expect_file.unlink()
+        self.reset()
+
+
+def install_decode(arm: str, expect_file: Path, outdir: Path, ref_calls) -> None:
+    """Hook the round driver's ``_logits`` / ``_draw`` (the one place every decode path draws) and, for
+    the reference arm, the ragged decode kernel (dense fp32 attention over the same cache)."""
+    from yunshu_engine.kernels import ragged_attention as ra
+    from yunshu_engine.round_driver import driver as rd
+
+    tap = DecodeTap(expect_file, outdir, ref_calls)
+    if arm == "ref":
+        decode = ra.ragged_decode_attention
+
+        def dense(queries, keys, values, lengths, scale, *a, **kw):
+            if kw.get("k_scales") is not None or kw.get("slots") is None:
+                return decode(queries, keys, values, lengths, scale, *a, **kw)
+            return reference_decode_attend(
+                queries, keys, values, lengths, scale, kw["slots"], ref_calls
+            )
+
+        ra.ragged_decode_attention = dense
+    logits_fn, draw_fn = rd.RoundDriver._logits, rd.RoundDriver._draw
+    seen: dict = {}
+
+    def logits_hook(self, hidden):
+        out = logits_fn(self, hidden)
+        seen["logits"] = out
+        return out
+
+    def draw_hook(self, items, hidden, target_logits=None):
+        seen["logits"] = target_logits
+        draws = draw_fn(self, items, hidden, target_logits)
+        if len(draws) == 1:
+            it, tok, extra = draws[0]
+            return [(it, tap.on_draw([it.kind], seen.get("logits"), tok), extra)]
+        if draws:
+            tap.on_draw(["many"] * len(draws), None, draws[0][1])
+        return draws
+
+    rd.RoundDriver._logits = logits_hook
+    rd.RoundDriver._draw = draw_hook
+
+
 def _cache_offset(cache) -> int | None:
     """Tokens already in a row's attention cache (None: no cache exposes an offset)."""
     for layer in cache:
@@ -348,12 +509,21 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
     rd.RoundDriver._prefill_step = hooked_prefill_step
 
 
-def ask(url: str, model: str, text: str) -> tuple[int, float]:
-    """One completion of one token; (prompt tokens, wall seconds)."""
+def decode_split(tokenizer, text: str, steps: int) -> tuple[str, list[int]]:
+    """The window as (prefix text to prefill, the ``steps + 1`` reference tokens to force one at a time)."""
+    ids = [int(t) for t in tokenizer(text)["input_ids"]]
+    if len(ids) < steps + 2:
+        raise RuntimeError(f"window of {len(ids)} tokens is shorter than {steps} steps")
+    cut = len(ids) - steps - 1
+    return tokenizer.decode(ids[:cut]), ids[cut:]
+
+
+def ask(url: str, model: str, text: str, max_tokens: int = 1) -> tuple[int, float]:
+    """One completion of ``max_tokens`` tokens; (prompt tokens, wall seconds)."""
     import urllib.error
     import urllib.request
 
-    body = dict(model=model, prompt=text, max_tokens=1, temperature=0)
+    body = dict(model=model, prompt=text, max_tokens=max_tokens, temperature=0)
     req = urllib.request.Request(
         url + "/v1/completions",
         json.dumps(body).encode(),
@@ -405,6 +575,12 @@ def run(args) -> None:
     windows = corpus.load_texts()[k::n]
     todo = [w for w in windows if not (cache / f"{w['id']}.npz").exists()]
     popen = subprocess.Popen
+    steps = int(getattr(args, "decode_steps", 0) or 0)
+    tokenizer = None
+    if steps and todo:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(args.model)
 
     def launch(command, *a, **kw):
         return popen(serve_command(command, args.arm, arch), *a, **kw)
@@ -420,6 +596,7 @@ def run(args) -> None:
             "YUNSHU_NEXT_TURN_PREFILL": "off",
             "YUNSHU_CONSOLE": "0",
             "KLD_CACHE_DIR": str(cache),
+            **({"KLD_DECODE": "1"} if steps else {}),
             # the reference must not use Yunshu's tile attention kernel: stock attention is what gets upcast
             # the engine's tensor-unit sparse prefill wraps dispatch_qsa_attention at model load, outside
             # the reference hook, and would answer every eligible call itself (ref == base, KLD 0)
@@ -437,8 +614,15 @@ def run(args) -> None:
         try:
             t.send(srv.url, t.req(srv.model, "Say hi.", 8))
             for w in todo:
-                (cache / "_current.json").write_text(json.dumps(dict(wid=w["id"])))
-                tokens, wall = ask(srv.url, srv.model, w["text"])
+                text, forced = w["text"], []
+                if steps:
+                    text, forced = decode_split(tokenizer, w["text"], steps)
+                (cache / "_current.json").write_text(
+                    json.dumps(dict(wid=w["id"], forced=forced))
+                )
+                tokens, wall = ask(
+                    srv.url, srv.model, text, len(forced) if steps else 1
+                )
                 if not (cache / f"{w['id']}.npz").exists():
                     raise RuntimeError(
                         f"{w['id']}: the capture hook wrote no window (prompt_tokens={tokens})"
@@ -489,6 +673,12 @@ def main(argv=None) -> int:
     r.add_argument("--cache-dir", required=True)
     r.add_argument("--shard", default="0/1")
     r.add_argument("--env", action="append", default=[])
+    r.add_argument(
+        "--decode-steps",
+        type=int,
+        default=0,
+        help="teacher-forced decode capture of this many T=1 steps after the window's prefix",
+    )
     r.add_argument("--out", required=True)
     a = p.parse_args(argv)
     run(a)

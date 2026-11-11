@@ -46,15 +46,31 @@ def _hidden_size(path) -> int | None:
     return None
 
 
+def has_mtp_head(model) -> bool:
+    """A checkpoint with indexed native MTP weights (config mtp_num_hidden_layers > 0 and an indexed mtp.* tensor);
+    the file-level twin of the engine's is_mtp_capable (a harness interpreter cannot import the engine)."""
+    try:
+        cfg = json.loads((Path(model) / "config.json").read_text())
+        idx = json.loads((Path(model) / "model.safetensors.index.json").read_text())
+    except (OSError, ValueError, TypeError):
+        return False
+    tc = cfg.get("text_config") or cfg
+    if int(tc.get("mtp_num_hidden_layers", 0) or 0) <= 0:
+        return False
+    wm = idx.get("weight_map", idx)
+    prefixes = ("mtp.", "language_model.mtp.", "model.mtp.")
+    return isinstance(wm, dict) and any(k.startswith(prefixes) for k in wm)
+
+
 def default_drafter(model) -> str:
     """Same rule as scripts/research/tfbench.py default_drafter (a parity test keeps them equal):
     the 27B DFlash2 drafter only for a target of its hidden size; any other target: "mtp"."""
     if model is None:
         return DRAFTER_27B
     want = _hidden_size(model)
-    return (
-        DRAFTER_27B if want is not None and want == _hidden_size(DRAFTER_27B) else "mtp"
-    )
+    if want is not None and want == _hidden_size(DRAFTER_27B):
+        return DRAFTER_27B
+    return "mtp" if has_mtp_head(model) else "off"
 
 
 def tfbench_script(tree: Path) -> Path:
@@ -927,8 +943,22 @@ def _spec_depth_valid(rows: list, mode: str) -> tuple[bool, str]:
     return True, ""
 
 
-def spec_mode_failures(base, cand, cfg, cell):
-    """A paired cell must prove both engines engaged the same speculative path."""
+def expected_spec_mode(suite: dict, env: dict) -> str | None:
+    """The speculative mode an arm must engage: an explicit YUNSHU_VLM_DRAFT (mtp / off / a drafter path =
+    dflash), else the suite's ``expect_spec_mode`` or $YV_EXPECT_SPEC; None when nothing is expected."""
+    draft = (env.get("YUNSHU_VLM_DRAFT") or "").strip().lower()
+    if draft in ("mtp", "off"):
+        return draft
+    if draft == "none":
+        return "off"
+    if draft:
+        return "dflash"
+    return suite.get("expect_spec_mode") or os.environ.get("YV_EXPECT_SPEC") or None
+
+
+def spec_mode_failures(base, cand, cfg, cell, expect=None):
+    """A paired cell must prove both engines engaged the same speculative path, and the path the run expects
+    (``expect``: {"base": mode, "cand": mode}; a plain-mode fallback in both arms must not pass)."""
     modes = []
     for arm, rows in (("base", base), ("cand", cand)):
         sessions = [r for r in rows if r.get("part") == "session"]
@@ -936,6 +966,10 @@ def spec_mode_failures(base, cand, cfg, cell):
         if not sessions or len(values) != 1 or not all(values):
             return [f"{cell}: missing or ambiguous {arm} engaged spec mode"]
         modes.append(next(iter(values)))
+    want = expect or {}
+    for arm, got in zip(("base", "cand"), modes, strict=True):
+        if want.get(arm) and got != want[arm]:
+            return [f"{cell}: {arm} engaged spec mode {got!r}, expected {want[arm]!r}"]
     if modes[0] != modes[1] and not cfg.get("allow_spec_mode_change", False):
         return [f"{cell}: engaged spec mode mismatch base={modes[0]} cand={modes[1]}"]
     return []
@@ -955,7 +989,16 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 numbers[f"{tag}per_depth".strip()] = depth_ok
                 if not depth_ok:
                     reasons.append(f"{tag}{why}")
-            reasons += spec_mode_failures(base, cand, ctx.suite, f"identity {mode}")
+            reasons += spec_mode_failures(
+                base,
+                cand,
+                ctx.suite,
+                f"identity {mode}",
+                {
+                    arm: expected_spec_mode(ctx.suite, ctx.arm_env(arm, mode_env(mode)))
+                    for arm in ("base", "cand")
+                },
+            )
             planned = analyze.planned_identity(ctx.suite["ctx"], ctx.suite["kinds"])
             cmp_ = analyze.compare_identity(
                 base,
@@ -965,7 +1008,13 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 planned=planned,
                 input_change_ok=bool(ctx.suite.get("input_change_ok")),
                 followup_drift_ok=bool(ctx.suite.get("followup_drift_ok")),
+                arith_change_ok=bool(ctx.suite.get("arith_change_ok")),
             )
+            if cmp_.get("arith_changed"):
+                numbers[f"{tag}arith_changed".strip()] = {
+                    "cells": cmp_["arith_changed"],
+                    "note": "arith_change_ok: digests differ, excused only if kld and kld_decode pass",
+                }
             if ctx.suite.get("followup_drift_ok"):
                 # printed in the verdict so the allowance is never silent
                 numbers[f"{tag}followup_allowance".strip()] = (
@@ -989,6 +1038,10 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 reasons.append(f"{tag}base != cand: {cmp_['mismatches'][:3]}")
             offrows = _rows_for(res, "candoff", mode)
             if offrows:
+                if analyze.session_info(offrows).get("engaged_spec_mode") != "off":
+                    reasons.append(
+                        f"{tag}spec-off arm engaged {analyze.session_info(offrows).get('engaged_spec_mode')!r}, expected 'off'"
+                    )
                 c2 = analyze.compare_identity(
                     offrows,
                     cand,
@@ -1299,6 +1352,12 @@ def _speed_reason(r: dict) -> str:
     )
 
 
+def _speed_expect(ctx: Ctx) -> dict:
+    return {
+        arm: expected_spec_mode(ctx.suite, ctx.arm_env(arm)) for arm in ("base", "cand")
+    }
+
+
 def stage_speed(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     _check_prompts(cfg["ctx"], cfg["kinds"])
@@ -1327,6 +1386,7 @@ def stage_speed(ctx: Ctx) -> StageResult:
                     read_jsonl(paired.evidence) if paired else [],
                     cfg,
                     f"speed {key}",
+                    _speed_expect(ctx),
                 )
         if reasons:
             return _finish(ctx, StageResult("speed", False, reasons, numbers))
@@ -1362,6 +1422,7 @@ def stage_speed(ctx: Ctx) -> StageResult:
                             read_jsonl(paired.evidence) if paired else [],
                             cfg,
                             f"speed confirmation {key}",
+                            _speed_expect(ctx),
                         )
                 if reasons:
                     return _finish(ctx, StageResult("speed", False, reasons, numbers))
@@ -3376,6 +3437,7 @@ def _kld_cell(
     shard: str,
     env: dict,
     mem_gb: float,
+    steps: int = 0,
 ):
     """One capture job: the windows of ``shard`` for ``arm`` ("base"/"cand"/"ref") from ``tree``'s engine."""
     src = ctx.tree(tree)
@@ -3403,6 +3465,7 @@ def _kld_cell(
             "--shard",
             shard,
             *_env_flags(env),
+            *(["--decode-steps", str(steps)] if steps else []),
             "--out",
             "{out}",
         ],
@@ -3412,19 +3475,19 @@ def _kld_cell(
     )
 
 
-def stage_kld(ctx: Ctx) -> StageResult:
+def _kld_decode_steps(suite: dict) -> int:
+    """T=1 teacher-forced decode steps per window of the ``kld_decode`` stage; ``kld_decode`` sets it (default 128)."""
+    v = suite.get("kld_decode")
+    return 128 if not v or v is True else int(v)
+
+
+def stage_kld(ctx: Ctx, decode: bool = False) -> StageResult:
+    """Prefill KLD, or with ``decode`` the teacher-forced decode-path KLD (stage name ``kld_decode``)."""
+    stage_name = "kld_decode" if decode else "kld"
     from .kld import corpus
     from .kld import stage as kld
 
-    if ctx.suite.get("kld_decode"):
-        return _finish(
-            ctx,
-            StageResult(
-                "kld",
-                False,
-                ["--kld-decode (teacher-forced decode path) is not implemented"],
-            ),
-        )
+    steps = _kld_decode_steps(ctx.suite) if decode else 0
     # detect_arch imports yunshu_engine; the yv controller runs without the repo's python/ on
     # sys.path (only the capture jobs get a tree's PYTHONPATH), so every kld stage raised
     # ModuleNotFoundError at this check (2026-11-10, deps-fix-16 INFRA_ERROR).
@@ -3442,8 +3505,10 @@ def stage_kld(ctx: Ctx) -> StageResult:
         return _finish(
             ctx,
             StageResult(
-                "kld",
-                True,
+                stage_name,
+                not ctx.suite.get(
+                    "arith_change_ok"
+                ),  # an excused identity change needs the reference check
                 [f"n/a: {e}"],
                 numbers={"applicable": False},
             ),
@@ -3463,7 +3528,14 @@ def stage_kld(ctx: Ctx) -> StageResult:
     }
     dirs = {
         name: kld.cache_dir(
-            kld.cache_key(name, src.key, ident, env, manifest["corpus_sha"])
+            kld.cache_key(
+                name,
+                src.key,
+                ident,
+                env,
+                manifest["corpus_sha"],
+                f"decode{steps}" if steps else "prefill",
+            )
         )
         for name, (_t, env, src) in arms.items()
     }
@@ -3482,11 +3554,12 @@ def stage_kld(ctx: Ctx) -> StageResult:
                     ctx,
                     name,
                     tree,
-                    f"{name}-{k}of{shards}",
+                    f"{'dec-' if steps else ''}{name}-{k}of{shards}",
                     dirs[name],
                     f"{k}/{shards}",
                     env,
                     ctx.mem_gb,
+                    steps,
                 )
             )
     reasons: list = []
@@ -3496,11 +3569,14 @@ def stage_kld(ctx: Ctx) -> StageResult:
     numbers: dict = {
         "cache": {n: d.name for n, d in dirs.items()},
         "corpus_sha": manifest["corpus_sha"],
+        "mode": f"decode (T=1, {steps} teacher-forced steps)" if steps else "prefill",
     }
     if not reasons:
         argv = [ctx.py, "-m", "verify.kld.analyze"] + [
             x for n in ("ref", "base", "cand") for x in (f"--{n}", str(dirs[n]))
         ]
+        if steps:
+            argv += ["--decode-steps", str(steps)]
         for flag, key in (("--eps", "kld_eps"), ("--top1-noise", "kld_top1_noise")):
             if key in ctx.suite:
                 argv += [flag, str(ctx.suite[key])]
@@ -3522,7 +3598,7 @@ def stage_kld(ctx: Ctx) -> StageResult:
                 {k: v for k, v in result.items() if k not in ("passed", "reasons")}
             )
             reasons += result["reasons"]
-    return _finish(ctx, StageResult("kld", not reasons, reasons, numbers))
+    return _finish(ctx, StageResult(stage_name, not reasons, reasons, numbers))
 
 
 STAGE_FUNCS = {
@@ -3560,6 +3636,7 @@ STAGE_FUNCS = {
     "apc": stage_apc,
     "quality": stage_quality,
     "kld": stage_kld,
+    "kld_decode": lambda ctx: stage_kld(ctx, decode=True),
     "speed": stage_speed,
     "memory": stage_memory,
     "longqa": stage_longqa,

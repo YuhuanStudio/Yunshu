@@ -23,6 +23,16 @@ def test_bad_setting_values_fail_before_the_gpu():
     runner.check_settings_env(ROOT, {"YUNSHU_PLE_STORAGE": "memory", "MLX_X": "1"})
 
 
+def _mtp(root):
+    """Give a fake checkpoint an indexed MTP head."""
+    cfg = json.loads((root / "config.json").read_text())
+    cfg["mtp_num_hidden_layers"] = 1
+    (root / "config.json").write_text(json.dumps(cfg))
+    (root / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc.weight": "m.safetensors"}})
+    )
+
+
 def test_the_27b_drafter_only_for_a_target_it_fits(tmp_path, monkeypatch):
     import tfbench
 
@@ -36,6 +46,13 @@ def test_the_27b_drafter_only_for_a_target_it_fits(tmp_path, monkeypatch):
     fn = tmp_path / "fn"
     fn.mkdir()
     (fn / "config.json").write_text(json.dumps({"hidden_size": 2560}))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "config.json").write_text(json.dumps({"hidden_size": 2048}))
+    assert tfbench.default_drafter(str(plain)) == "off"  # no MTP head, no drafter
+    mode, env = tfbench.spec_request("yunshu", {}, str(plain))
+    assert mode == "off" and env["YUNSHU_VLM_DRAFT"] == "off"
+    _mtp(fn)
     assert tfbench.default_drafter(str(big)) == str(drafter)
     assert tfbench.default_drafter(str(fn)) == "mtp"
     mode, env = tfbench.spec_request("yunshu", {}, str(fn))

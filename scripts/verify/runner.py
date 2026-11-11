@@ -148,6 +148,12 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["apc_require_hit"] = False
     if getattr(a, "input_change_ok", False):
         cfg["input_change_ok"] = True
+    if getattr(a, "arith_change_ok", False):
+        cfg["arith_change_ok"] = True
+        # the identity difference is excused only by the reference check: both KLD stages join the run
+        stages = [s for s in cfg["stages"] if s not in ("kld", "kld_decode")]
+        at = stages.index("speed") if "speed" in stages else len(stages)
+        cfg["stages"] = stages[:at] + ["kld", "kld_decode"] + stages[at:]
     if getattr(a, "followup_drift_ok", False):
         cfg["followup_drift_ok"] = True
     return cfg

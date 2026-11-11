@@ -158,6 +158,13 @@ def build_parser() -> argparse.ArgumentParser:
         "change) are listed as input_changed instead of failing identity; spec on/off stays strict",
     )
     ab.add_argument(
+        "--arith-change-ok",
+        action="store_true",
+        help="base != cand digests (a deliberate kernel change that alters arithmetic) are listed as "
+        "arith_changed instead of failing identity, and the run then REQUIRES the kld (prefill) and "
+        "kld_decode stages to pass against the reference; spec on/off and solo/concurrent stay strict",
+    )
+    ab.add_argument(
         "--mem-gb",
         type=float,
         default=0,

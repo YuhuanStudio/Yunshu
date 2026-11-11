@@ -37,6 +37,24 @@ EVIDENCE = {
         ],
         "Per-projection microbench shows the lane matmul flat in rows where upstream's per-row singleton qmv scales with them; the verify-forward timing and the engine identity (spec on == off) receipts are the open items.",
     ),
+    "YUNSHU_QWEN4_PREFILL_STEP": (
+        "prefill",
+        "pending",
+        [
+            "lead/study/fn_prefill_omlx_1111.md (oMLX prefills Flash-Next in 8192-token forwards on NAX)",
+            "verify run fnstep8k-809fa20ca2b8 (8192 vs 2048: cold TTFT 8K/32K/64K)",
+        ],
+        "Speed A/B queued; KLD vs reference and peak memory at 8192 are the open items before a default.",
+    ),
+    "YUNSHU_GENERIC_LANE": (
+        "lane",
+        "pending",
+        [
+            "lead/deep/w3_nax_map.md (generic families: lane conversion is the route to the NAX lane prefill)",
+            "verify runs nax-gemma-e2b / nax-gemma2 (Gemma 4 E2B 4-bit, lane vs stock)",
+        ],
+        "Gemma E2B speed + solo == concurrent identity + KLD are the open items; E4B is bf16 (no quantized projections, no effect).",
+    ),
 }
 
 

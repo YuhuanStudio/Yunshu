@@ -37,7 +37,12 @@ from .core import (
 GATE_STAGES = {
     "install": ("install.", 25, 8, 15),
     "serve-27b": ("serve-27b.", 45, 65, 20),
-    "families": ("families.", 45, 40, 20),
+    "families": (
+        "families.",
+        90,
+        65,
+        20,
+    ),  # flashnext + gemma4-e2b add in-process and stock speed rows
     "soak-mmlu": ("soak.mmlu", 90, 65, 20),
     "soak-realistic": ("soak.realistic", 60, 65, 20),
     "agent-sessions": ("agent.", 90, 65, 20),

@@ -161,7 +161,12 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
 ):
     import sys
 
-    (tmp_path / "config.json").write_text('{"model_type":"qwen3_5"}')
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"qwen3_5","mtp_num_hidden_layers":1}'
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"mtp.fc.weight":"m.safetensors"}}'
+    )
     # the tmp target has no hidden size; the drafter config on the benchmark machine has one, so the
     # result must not depend on whether the drafter is on this disk (it is on the M5, not on the M3)
     monkeypatch.setattr(

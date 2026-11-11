@@ -156,10 +156,38 @@ def test_incomplete_or_malformed_arm_cache_fails_closed(tmp_path):
         stage.load_arm(tmp_path, manifest)
 
 
-def test_suite_and_decode_mode_fail_closed():
-    from verify import suites
+def test_suite_and_decode_mode():
+    from verify import stages, suites
 
     assert suites.parse_suite("kld")["stages"] == ["kld"]
+    dec = suites.parse_suite("kld-decode")
+    assert dec["stages"] == ["kld_decode"] and stages._kld_decode_steps(dec) == 128
+    assert "kld_decode" in stages.STAGE_FUNCS and "kld_decode" not in suites.LADDER
+    assert stages._kld_decode_steps({}) == 128
+    assert stages._kld_decode_steps({"kld_decode": True}) == 128
+    assert stages._kld_decode_steps({"kld_decode": 64}) == 64
+
+
+def test_decode_windows_have_exactly_their_forced_steps(tmp_path):
+    """Decode windows carry N positions, not the manifest's prompt length: the count is exact."""
+    manifest = {"windows": [{"id": "w", "tokens": 8192}]}
+    np.savez(
+        tmp_path / "w.npz",
+        ids=np.zeros((5, 2), np.int32),
+        lp=np.full((5, 2), -1.0, np.float32),
+        next_lp=np.zeros(5, np.float32),
+        tokens=np.arange(5, dtype=np.int32),
+    )
+    assert "w" in stage.load_arm(tmp_path, manifest, decode_steps=5)
+    with pytest.raises(RuntimeError, match="expected 6"):
+        stage.load_arm(tmp_path, manifest, decode_steps=6)
+    with pytest.raises(RuntimeError, match="expected 8192"):
+        stage.load_arm(tmp_path, manifest)
+
+
+def test_decode_cache_key_differs_from_prefill():
+    a = stage.cache_key("base", "s", "m", {}, "c", "prefill")
+    assert a != stage.cache_key("base", "s", "m", {}, "c", "decode128")
 
 
 def test_arms_with_different_position_counts_fail_closed():

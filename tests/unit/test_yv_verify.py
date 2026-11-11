@@ -211,6 +211,7 @@ def test_full_suite_has_every_stage():
     assert suites.parse_suite("full")["stages"] == list(suites.LADDER)
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "round-golden",
+        "kld_decode",
         "probe",
         "longqa",
         "conc",
@@ -1878,6 +1879,31 @@ def test_spec_mode_guard_rejects_mixed_or_missing_engagement(stage):
     )
     # Explicit opt-in does not waive missing evidence.
     assert stages.spec_mode_failures(base, [], {"allow_spec_mode_change": True}, stage)
+
+
+def test_expected_spec_mode_is_enforced_even_when_both_arms_agree(monkeypatch):
+    """MTP expected but both arms fell back to plain: base == cand used to pass."""
+    plain = [{"part": "session", "engaged_spec_mode": "off"}]
+    mtp = [{"part": "session", "engaged_spec_mode": "mtp"}]
+    want = {"base": "mtp", "cand": "mtp"}
+    fail = stages.spec_mode_failures(plain, plain, {}, "identity", want)
+    assert fail and "expected 'mtp'" in fail[0]
+    assert not stages.spec_mode_failures(mtp, mtp, {}, "identity", want)
+    assert not stages.spec_mode_failures(plain, plain, {}, "identity", None)
+    assert not stages.spec_mode_failures(plain, plain, {}, "identity", {"base": None})
+
+
+def test_expected_spec_mode_sources(monkeypatch):
+    monkeypatch.delenv("YV_EXPECT_SPEC", raising=False)
+    f = stages.expected_spec_mode
+    assert f({}, {"YUNSHU_VLM_DRAFT": "MTP"}) == "mtp"
+    assert f({}, {"YUNSHU_VLM_DRAFT": "none"}) == "off"
+    assert f({}, {"YUNSHU_VLM_DRAFT": "/models/drafter"}) == "dflash"
+    assert f({"expect_spec_mode": "dflash"}, {}) == "dflash"
+    assert f({}, {}) is None
+    monkeypatch.setenv("YV_EXPECT_SPEC", "mtp")
+    assert f({}, {}) == "mtp"
+    assert f({"expect_spec_mode": "dflash"}, {"YUNSHU_VLM_DRAFT": "off"}) == "off"
 
 
 @pytest.mark.parametrize("suite", ["identity", "speed"])

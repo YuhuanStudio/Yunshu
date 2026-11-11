@@ -99,7 +99,12 @@ measured in minutes instead of an MMLU run.
 - **Verdict:** PASS when `KLD(ref‖cand) ≤ KLD(ref‖base) × 1.1 + ε` and top-1 vs ref is not lower than base's beyond
   the noise. ε and the top-1 noise come from `scripts/verify/kld/noise.json` (source recorded there) or the
   defaults (0.002 / 0.003). Incomplete or malformed windows fail the stage.
-- **Decode mode** (`--kld-decode`, teacher-forced through the decode / verify path) is not implemented and fails closed.
+- **Decode mode** (`--suite kld-decode`, suite key `kld_decode` = steps, default 128): each window's last N+1 tokens are the
+  reference continuation; the prefix prefills, then the reference tokens are forced one at a time (T=1) through the served
+  decode forward and the logits of every step are recorded, so a decode-kernel change shows in KLD. The `ref` arm swaps the
+  ragged decode kernel for dense fp32 attention (Qwen3.5 family; Flash-Next decode has no reference mode yet and the stage
+  fails closed with `ref not engaged`). T=2 verify windows are not captured: speculative decode must be off (a wider window marks
+  the capture bad and the run fails). The prefill-mode verdict above does not cover decode kernels.
 
 ```
 yv ab --base main --cand <dir> --suite kld --model <Flash-Next dir> --cand-env YUNSHU_QSA_SPARSE_PREFILL=1 --label <topic>
@@ -354,3 +359,8 @@ its own estimates). The option is recorded in the run configuration / gate
 fingerprint. It leaves comparisons, quiet timing admission and completion checks
 unchanged. Jobs at or below ten minutes enter gpuq's existing short lane and are
 killed if they exceed that hard limit. Omit the option for unmeasured workloads.
+
+`--arith-change-ok` (identity): for a deliberate kernel change that alters arithmetic, base != cand digests are listed
+as `arith_changed` instead of failing; spec on == off and solo == concurrent stay strict, and the run adds the `kld` and
+`kld_decode` stages, which must pass against the reference (a family without capture hooks fails instead of `n/a`).
+Without an MTP head or a DFlash drafter the default speculative request is `off`, not `mtp`.

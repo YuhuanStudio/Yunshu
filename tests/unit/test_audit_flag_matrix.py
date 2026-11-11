@@ -215,6 +215,12 @@ def test_audit_drafter_follows_the_target_not_the_27b(tmp_path, monkeypatch):
     monkeypatch.setattr(audit.tfbench, "D", str(drafter))
     big = _hidden_model(tmp_path / "27b", 5120)
     small = _hidden_model(tmp_path / "fn", 2560)
+    (small / "config.json").write_text(
+        json.dumps({"hidden_size": 2560, "mtp_num_hidden_layers": 1})
+    )
+    (small / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc.weight": "m.safetensors"}})
+    )
     assert audit.drafter_for(big) == str(drafter)
     assert audit.drafter_for(small) == "mtp"
     assert audit.tree_drafters(small) == ["mtp"]

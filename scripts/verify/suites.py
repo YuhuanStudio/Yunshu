@@ -18,6 +18,7 @@ STAGES = (
     "apc",
     "quality",
     "kld",
+    "kld_decode",
     "speed",
     "memory",
     "longqa",
@@ -53,6 +54,7 @@ LADDER = tuple(
     if s
     not in (
         "round-golden",
+        "kld_decode",
         "longqa",
         "conc",
         "phaseb-identity",
@@ -338,6 +340,8 @@ SUITES["long-gate"] = {
 # Thinking-mode MMLU-Pro 300 (the Flash-Next protocol behind MODEL_SUPPORT's 261/300): paired, greedy, long replies.
 # Teacher-forced KL divergence of base and candidate against a reference (docs/guides/VERIFY.md, "kld").
 SUITES["kld"] = {"stages": ["kld"], "ctx": [1024], "kld_ref_shards": 2}
+# The same verdict over the decode path: T=1 steps through the served decode kernels (decode-kernel changes).
+SUITES["kld-decode"] = {**SUITES["kld"], "stages": ["kld_decode"], "kld_decode": 128}
 
 SUITES["quality-think"] = {
     "stages": ["quality"],

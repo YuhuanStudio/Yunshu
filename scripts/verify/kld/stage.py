@@ -57,7 +57,7 @@ def missing_windows(directory: Path, manifest: dict) -> list[str]:
     ]
 
 
-def load_arm(directory: Path, manifest: dict) -> dict:
+def load_arm(directory: Path, manifest: dict, decode_steps: int = 0) -> dict:
     """Every manifest window of an arm; fails closed on a missing or malformed window (numpy: run under the
     engine interpreter, see analyze.py; yv itself runs on the system python)."""
     import numpy as np
@@ -78,9 +78,12 @@ def load_arm(directory: Path, manifest: dict) -> dict:
                 int(z["ref_calls"]) if "ref_calls" in z.files else None,
             )
         window.check()
-        if abs(window.ids.shape[0] - w["tokens"]) > POSITION_SLACK:
+        want = (
+            decode_steps or w["tokens"]
+        )  # a decode window has exactly its forced steps
+        if abs(window.ids.shape[0] - want) > (0 if decode_steps else POSITION_SLACK):
             raise RuntimeError(
-                f"{w['id']}: {window.ids.shape[0]} positions, manifest says {w['tokens']}"
+                f"{w['id']}: {window.ids.shape[0]} positions, expected {want}"
             )
         out[w["id"]] = window
     return out

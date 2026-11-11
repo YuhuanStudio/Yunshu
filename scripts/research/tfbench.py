@@ -227,14 +227,32 @@ def _hidden_size(path):
     return None
 
 
+def has_mtp_head(model) -> bool:
+    """A checkpoint with indexed native MTP weights (config mtp_num_hidden_layers > 0 and an indexed mtp.* tensor);
+    the file-level twin of the engine's is_mtp_capable (a harness interpreter cannot import the engine)."""
+    try:
+        cfg = json.loads((Path(model) / "config.json").read_text())
+        idx = json.loads((Path(model) / "model.safetensors.index.json").read_text())
+    except (OSError, ValueError, TypeError):
+        return False
+    tc = cfg.get("text_config") or cfg
+    if int(tc.get("mtp_num_hidden_layers", 0) or 0) <= 0:
+        return False
+    wm = idx.get("weight_map", idx)
+    prefixes = ("mtp.", "language_model.mtp.", "model.mtp.")
+    return isinstance(wm, dict) and any(k.startswith(prefixes) for k in wm)
+
+
 def default_drafter(model):
-    """The 27B DFlash2 drafter only for a target it fits (same hidden size); any other model
-    (Flash-Next: 2560) drafts with its own MTP head. Forcing the 27B drafter on it failed
-    every Flash-Next yv run at server start (2026-11-02)."""
+    """The 27B DFlash2 drafter only for a target it fits (same hidden size); a model with its own MTP head
+    (Flash-Next: 2560) drafts with it; a model with neither drafts nothing ("off"): requesting mtp there
+    failed every yv speed/smoke run with "requested spec=mtp, engaged=off"."""
     if model is None:
         return D
     want = _hidden_size(model)
-    return D if want is not None and want == _hidden_size(D) else "mtp"
+    if want is not None and want == _hidden_size(D):
+        return D
+    return "mtp" if has_mtp_head(model) else "off"
 
 
 def spec_request(engine, extra_env, model=None):

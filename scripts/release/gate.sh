@@ -28,6 +28,9 @@ PULL_REPO=${PULL_REPO:-Jundot/Qwen3.8-27B-oQ4e-mtp}   # already in MODELS_DIR: m
 SOAK_MINUTES=${SOAK_MINUTES:-30}
 MMLU_BASELINE=${MMLU_BASELINE:-249}        # 27B MMLU-Pro 300 b8, 2026-09-29 (ragged default)
 MMLU_TOLERANCE=${MMLU_TOLERANCE:-3}
+# families that only the Flash-Next / generic layers serve: speed rows against stock mlx-vlm (checkpoints may be overridden)
+M_FLASHNEXT=${M_FLASHNEXT:-/Volumes/Micron/models/Jundot/Qwen3.8-Flash-Next-oQ2.5e-mtp}
+M_GEMMA_E2B=${M_GEMMA_E2B:-/Volumes/P5Plus/models/gemma-4-e2b-it-4bit}
 
 mkdir -p $OUT $GATE_ROOT
 OUT=${OUT:A}
@@ -80,6 +83,29 @@ log_clean(){  # $1 check name, $2 server log
   local n=$(grep -c "Traceback" $2)
   if [ $n = 0 ]; then rec $1 PASS "no Traceback in $(basename $2)"
   else rec $1 FAIL "$n Traceback(s) in $(basename $2): $(grep -m1 -E '^[A-Za-z_.]+(Error|Exception)' $2 | cut -c1-160)"; fi
+}
+family_speed(){  # $1 label, $2 model dir, then: identity (server vs in-process text + speed) and/or stock (floor vs mlx-vlm)
+  local label=$1 mpath=$2; shift 2
+  local sname=$(curl -s -m 5 $URL/v1/models | $PY -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null)
+  local kind out sj sps spc detail
+  for kind in "$@"; do
+    out=$OUT/family-$label-$kind.json
+    if [ $kind = identity ]; then
+      sj=$(${YENV[@]} $GATE_ROOT/tool-all/yunshu/bin/python scripts/release/check_server_path.py --url $URL \
+        --retry-contended --model $mpath --served-name "$sname" --server-log $OUT/family-$label-server.log \
+        --output $out 2> $OUT/family-$label-$kind.log | tail -1)
+    else
+      sj=$(${YENV[@]} $PY scripts/release/check_stock_speed.py --url $URL --retry-contended --model $mpath \
+        --served-name "$sname" --stock-log $OUT/family-$label-stock-server.log --output $out 2> $OUT/family-$label-$kind.log | tail -1)
+    fi
+    sps=$($PY -c 'import json,sys; print(json.loads(sys.argv[1])["status"])' "$sj" 2>/dev/null)
+    spc=$($PY -c 'import json,sys; print(str(json.loads(sys.argv[1]).get("contended", False)).lower())' "$sj" 2>/dev/null)
+    detail=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"geomean {d['geomean_ratio']} (min {d['min_geomean']}), worst {d['worst_ratio']} (floor {d['min_ratio']}), same text {d['same_text']}\")" "$sj" 2>/dev/null)
+    case $sps in
+      PASS|CONTENDED) rec families.$label.$kind $sps "${detail:-CPU contention; rerun}" --contended "${spc:-true}" ;;
+      *) rec families.$label.$kind FAIL "${detail:-could not measure ($label-$kind.log)}" --contended "${spc:-false}" ;;
+    esac
+  done
 }
 need_bin(){ [ -x $1 ] && return 0; rec $2 FAIL "$1 missing: run STAGE=install first"; return 1; }
 
@@ -176,6 +202,8 @@ if has families; then
     "qwen35-9b-4bit|M_QWEN35_9B|chat,stream,tools,schema,image"
     "text-lm|M_TEXT_LM|chat,stream,tools,schema"
     "gemma4-e4b|M_GEMMA|chat,stream,tools,image"
+    "gemma4-e2b|M_GEMMA_E2B|chat,stream"
+    "flashnext|M_FLASHNEXT|chat,stream"
     "glm-ocr|M_OCR|ocr"
     "asr|M_ASR|asr"
     "tts|M_TTS|tts"
@@ -193,6 +221,10 @@ if has families; then
       if serve $BA $mpath $OUT/family-$label-server.log; then
         rec families.$label.boot PASS "$(basename $mpath)"
         client families.$label. family --url $URL --kinds $kinds --audio $OUT/asr.wav
+        case $label in
+          flashnext) family_speed $label $mpath identity stock ;;  # server == in-process text + speed, then the stock floor
+          gemma4-e2b) family_speed $label $mpath stock ;;          # generic layer: speed floor against stock mlx-vlm
+        esac
       else rec families.$label.boot FAIL "not ready (family-$label-server.log)"; fi
       stop $YP
       log_clean families.$label.log_clean $OUT/family-$label-server.log

@@ -51,6 +51,7 @@ def compare_identity(
     strict_logprobs=False,
     input_change_ok=False,
     followup_drift_ok=False,
+    arith_change_ok=False,
 ) -> dict:
     """Greedy digests equal on every planned cell (default: the cells either arm produced); a
     cell missing in either arm, or a record without sha / ct, fails closed. With
@@ -62,7 +63,9 @@ def compare_identity(
     "input_changed" and leaves the comparison. With followup_drift_ok (base vs cand only) a turn2
     digest difference is listed under "followup_drift": the follow-up resumes from the reply's
     decode KV, which may differ numerically from a re-prefill (user decision 2026-11-02, same
-    class as cross-version drift); the turn2 cell still has to exist and be complete."""
+    class as cross-version drift); the turn2 cell still has to exist and be complete.
+    With arith_change_ok (base vs cand only: a deliberate kernel change that alters arithmetic) a digest
+    difference is listed under "arith_changed" instead of failing; the caller must then require the kld stage."""
     a, b = decode_index(a_rows), decode_index(b_rows)
     if planned is not None:
         keys = sorted({tuple(k) for k in planned})
@@ -72,7 +75,7 @@ def compare_identity(
     else:
         keys = sorted(k for k in set(a) | set(b) if ctxs is None or k[0] in ctxs)
         extra = []
-    bad, n, drift, worst, changed, followup = [], 0, [], 0.0, [], []
+    bad, n, drift, worst, changed, followup, arith = [], 0, [], 0.0, [], [], []
     for k in keys + extra:
         ra, rb = a.get(k), b.get(k)
         if k in extra and (ra is None or rb is None):
@@ -124,7 +127,7 @@ def compare_identity(
             )
             continue
         if ra.get("sha") != rb.get("sha") or ra.get("ct") != rb.get("ct"):
-            bad.append(
+            (arith if arith_change_ok else bad).append(
                 {
                     "cell": list(k),
                     "why": "digest differs",
@@ -159,6 +162,7 @@ def compare_identity(
         "drift": drift,
         "input_changed": changed,
         "followup_drift": followup,
+        "arith_changed": arith,
         "max_abs_dlp": worst,
         "ok": n > 0 and not bad,
     }

@@ -19,12 +19,13 @@ def main(argv=None) -> int:
     p.add_argument("--cand", required=True)
     p.add_argument("--eps", type=float)
     p.add_argument("--top1-noise", type=float)
+    p.add_argument("--decode-steps", type=int, default=0)
     a = p.parse_args(argv)
     manifest = corpus.load_manifest()
     from pathlib import Path
 
     arms = {
-        n: stage.load_arm(Path(d), manifest)
+        n: stage.load_arm(Path(d), manifest, a.decode_steps)
         for n, d in (("ref", a.ref), ("base", a.base), ("cand", a.cand))
     }
     noise = stage.noise()

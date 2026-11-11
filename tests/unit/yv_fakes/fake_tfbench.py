@@ -33,7 +33,8 @@ if (
     and not a.smoke
 ):
     raise SystemExit("fake crash on this rep")
-spec = "off" if env.get("YUNSHU_VLM_DRAFT", "").lower() in ("off", "none") else "dflash"
+draft = env.get("YUNSHU_VLM_DRAFT", "").lower()
+spec = "off" if draft in ("off", "none") else "mtp" if draft == "mtp" else "dflash"
 ctxs = [512] if a.smoke else a.only_ctx or [1024]
 log_dir = os.path.join(os.environ.get("TFB_OUT", "."), "out")
 os.makedirs(log_dir, exist_ok=True)

@@ -35,10 +35,18 @@ def test_picker_matches_tfbench_default_drafter(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "DRAFTER_27B", drafter)
     big = _model(tmp_path / "27b", 5120, nested=True)
     small = _model(tmp_path / "fn", 2560)
-    for model in (big, small, None):
+    plain = _model(tmp_path / "plain", 2048)
+    (tmp_path / "fn" / "config.json").write_text(
+        json.dumps({"hidden_size": 2560, "mtp_num_hidden_layers": 1})
+    )
+    (tmp_path / "fn" / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc.weight": "m.safetensors"}})
+    )
+    for model in (big, small, plain, None):
         assert stages.default_drafter(model) == tfbench.default_drafter(model)
     assert stages.default_drafter(big) == drafter
     assert stages.default_drafter(small) == "mtp"
+    assert stages.default_drafter(plain) == "off"
 
 
 def test_lane_stage_refuses_a_target_without_a_drafter_dir(tmp_path, monkeypatch):
@@ -74,7 +82,14 @@ def test_anenative_gate1_drafter_is_model_matched(tmp_path, monkeypatch):
     spec.loader.exec_module(gate1)
     drafter = _model(tmp_path / "drafter", 5120)
     monkeypatch.setattr(tfbench, "D", drafter)
-    monkeypatch.setattr(tfbench, "M", _model(tmp_path / "fn", 2560))
+    fn = _model(tmp_path / "fn", 2560)
+    (tmp_path / "fn" / "config.json").write_text(
+        json.dumps({"hidden_size": 2560, "mtp_num_hidden_layers": 1})
+    )
+    (tmp_path / "fn" / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc.weight": "m.safetensors"}})
+    )
+    monkeypatch.setattr(tfbench, "M", fn)
     assert gate1.arm_drafter(tfbench) == "mtp"
     monkeypatch.setattr(tfbench, "M", _model(tmp_path / "27b", 5120))
     assert gate1.arm_drafter(tfbench) == drafter
