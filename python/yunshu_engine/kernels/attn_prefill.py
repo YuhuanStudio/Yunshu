@@ -31,7 +31,7 @@ from typing import Any, cast
 
 import mlx.core as mx
 
-from . import gdn_prefill, gpu_probe
+from . import gdn_prefill
 
 logger = logging.getLogger(__name__)
 
@@ -241,15 +241,9 @@ def attend(q: mx.array, k: mx.array, v: mx.array) -> mx.array:
 
 
 def supported_device() -> bool:
-    if importlib.metadata.version("mlx") not in ("0.32.3", "0.32.4"):
-        return False
-    info = gpu_probe.device_info()
-    from .tensorfold.lane_qmm import _generation
+    from .nax_prefill import m5_class, mlx_supported
 
-    return bool(
-        info.get("device_name") == "Apple M5 Max"
-        and _generation(str(info.get("architecture", ""))) in (17, 18)
-    )
+    return mlx_supported() and m5_class()
 
 
 def arithmetic_id() -> str:

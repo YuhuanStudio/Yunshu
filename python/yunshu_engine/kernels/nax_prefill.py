@@ -205,14 +205,9 @@ def enable() -> bool:
     global _enabled, _dispatches
     _enabled = False
     _dispatches = 0
-    if importlib.metadata.version("mlx") not in ("0.32.3", "0.32.4"):
+    if not mlx_supported():
         return False
-    info = gpu_probe.device_info()
-    from .tensorfold.lane_qmm import _generation
-
-    if info.get("device_name") != "Apple M5 Max" or _generation(
-        str(info.get("architecture", ""))
-    ) not in (17, 18):
+    if not m5_class():
         return False
     try:
         lane_header()
@@ -220,6 +215,25 @@ def enable() -> bool:
         return False
     _enabled = True
     return True
+
+
+def mlx_supported() -> bool:
+    """MLX 0.32.3 or newer; the lane header ABI check in ``enable`` refuses an incompatible build."""
+    parts = importlib.metadata.version("mlx").split(".")[:3]
+    try:
+        return tuple(int(p) for p in parts) >= (0, 32, 3)
+    except ValueError:
+        return False
+
+
+def m5_class() -> bool:
+    """Any M5-generation GPU (M5, M5 Pro, M5 Max): the NAX tensor units, not one device name."""
+    info = gpu_probe.device_info()
+    from .tensorfold.lane_qmm import _generation
+
+    return str(info.get("device_name", "")).startswith("Apple M5") and _generation(
+        str(info.get("architecture", ""))
+    ) in (17, 18)
 
 
 def enabled() -> bool:

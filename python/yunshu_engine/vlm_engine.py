@@ -2923,7 +2923,7 @@ class VLMEngine:
         from .kernels import lane_linear, nax_prefill
         from .kernels.tensorfold.lane_qmm import ready
 
-        if not ready():
+        if not (ready() and nax_prefill.mlx_supported() and nax_prefill.m5_class()):
             return
         lanes = lane_linear.convert(lm)
         if not lanes["converted"]:

@@ -33,11 +33,43 @@ def test_measured_shapes_require_enable(monkeypatch):
     assert nax_prefill.eligible(8192, 17408, 5120, 5, 64, True)
 
 
-def test_unknown_version_disables_even_a_previous_enable(monkeypatch):
+def test_old_version_or_bad_abi_disables_even_a_previous_enable(monkeypatch):
     monkeypatch.setattr(nax_prefill, "_enabled", True)
-    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.33.0")
+    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.32.2")
     assert not nax_prefill.enable()
     assert not nax_prefill.enabled()
+    # a newer MLX is tried, and its lane header ABI check decides
+    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.33.0")
+    monkeypatch.setattr(
+        nax_prefill.gpu_probe,
+        "device_info",
+        lambda: {"device_name": "Apple M5 Max", "architecture": "applegpu_g17s"},
+    )
+
+    def bad_abi():
+        raise ValueError("ABI changed")
+
+    monkeypatch.setattr(nax_prefill, "lane_header", bad_abi)
+    assert not nax_prefill.enable()
+
+
+@pytest.mark.parametrize("name", ["Apple M5", "Apple M5 Pro", "Apple M5 Max"])
+def test_every_m5_variant_enables(monkeypatch, name):
+    """User 2026-11-11: NAX must reach every M5, not only the M5 Max it was measured on."""
+    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.32.4")
+    monkeypatch.setattr(
+        nax_prefill.gpu_probe,
+        "device_info",
+        lambda: {"device_name": name, "architecture": "applegpu_g17s"},
+    )
+    monkeypatch.setattr(nax_prefill, "lane_header", lambda: "known ABI")
+    assert nax_prefill.enable()
+    monkeypatch.setattr(
+        nax_prefill.gpu_probe,
+        "device_info",
+        lambda: {"device_name": "Apple M4 Max", "architecture": "applegpu_g16s"},
+    )
+    assert not nax_prefill.enable()
 
 
 @pytest.mark.parametrize("version", ["0.32.3", "0.32.4"])
