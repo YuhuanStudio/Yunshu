@@ -2579,6 +2579,8 @@ class VLMEngine:
                     self._config.get("model_type"),
                 )
             spec_family = False
+            if settings.get_bool("YUNSHU_GENERIC_LANE"):
+                self._generic_lane_nax(lm)
         driver_lanes = 0
         if use_driver and not qwen4:
             # Row-invariant lane projections everywhere (before any verify
@@ -2914,6 +2916,34 @@ class VLMEngine:
         )
         logger.info("Round driver layer: %s", "generic" if generic_layer else "packed")
         return runner
+
+    def _generic_lane_nax(self, lm) -> None:
+        """M5 NAX prefill for generic-layer models: quantized projections become row-invariant lane
+        matmuls (solo == concurrent still holds) whose prefill pieces run the native NAX tiles."""
+        from .kernels import lane_linear, nax_prefill
+        from .kernels.tensorfold.lane_qmm import ready
+
+        if not ready():
+            return
+        lanes = lane_linear.convert(lm)
+        if not lanes["converted"]:
+            return
+        lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
+        nax = nax_prefill.enable()
+        if nax:
+            nax_prefill.warmup(
+                {
+                    m.bits
+                    for _, m in lm.named_modules()
+                    if isinstance(m, lane_linear.LaneLinear)
+                }
+            )
+        logger.info(
+            "Generic layer: %d lane projections (%d skipped), NAX prefill %s",
+            lanes["converted"],
+            len(lanes["skipped"]),
+            "on" if nax else "off",
+        )
 
     def _generic_row_drafters(self, model_path: str):
         """Draft LM (``YUNSHU_DRAFT_MODEL``) / Gemma-4 assistant (``YUNSHU_GEMMA4_ASSISTANT``) drafters
