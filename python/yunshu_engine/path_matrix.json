@@ -1822,6 +1822,7 @@
     "python/yunshu_engine/spec_prefill.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
     "python/yunshu_engine/spec_prefill_engine.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
     "python/yunshu_engine/mtp_tree.py": "MTP draft-tree rounds for mlx-vlm's single-request loop; its install() patch was dead on the round driver and was removed (deadcode-1110). Kept with mtp_lane.rounds / copy_graft / copy_cost for the planned MTP copy-and-graft port to the driver (MAINLINES 11-10); wire or delete after that A/B.",
+    "python/yunshu_engine/round_driver/layer.py": "M1 layer registry; wired in C2-C8 (line-m1c1-1112)",
     "python/yunshu_engine/round_driver/textlm.py": "T7 text-model adapter for the round driver; routed by line-textdriver-1111 (text models onto the driver), then removed from orphans"
   },
   "modules_other": {
