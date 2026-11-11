@@ -1,8 +1,14 @@
-"""Model layers of the round driver (M1): one object per model family, chosen by ``LayerRegistry.select``.
+"""Model layers of the round driver (M1): one object per model family, bound to one language model.
 
-C1 adds the layer objects beside the driver without moving any call site: each adapter delegates to the
-function the driver already uses (``forward.supports``, ``flashnext.is_flash_next``, ``generic.new_cache``).
-The driver keeps its ``self.flash`` / ``self.generic`` tests until C2-C8 wire the layer in.
+``RoundDriver`` takes a layer (``layer=``) and asks it for its drafters (head, DFlash batch, default draft
+width) and its decode set (the batch rows join). The layer objects delegate to the functions the driver used
+before, so the arithmetic and the construction order are unchanged.
+
+Selection: the driver's ``generic_layer=`` flag keeps the old rule (generic if set, else Flash-Next by
+``flashnext.is_flash_next``, else packed). ``LayerRegistry.select`` is NOT used for selection yet: the engine's
+rule is wider (``vlm_engine._round_driver_wanted``: spec family, lane self-test), and ``PackedLayer.supports``
+is structural only (``forward.supports``). The registry becomes the selector only when the engine passes a
+layer object (C8).
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from typing import Any, ClassVar, Protocol
 import mlx.core as mx
 
 from . import flashnext, forward, generic
+from .batch import MAX_WINDOW, DecodeBatch
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,15 @@ class LayerCaps:
     slot_decode: bool
     identity_logits: bool
     per_token_rows: bool
+
+
+@dataclass
+class Drafters:
+    """The drafter objects of one driver: a row head, a DFlash batch, and the default drafts per round."""
+
+    head: Any
+    dflash: Any
+    max_draft: int
 
 
 class ModelLayer(Protocol):
@@ -50,6 +66,22 @@ class ModelLayer(Protocol):
         """Logits of hidden rows ``[R, D]`` (generic: the rows already are logits)."""
         ...
 
+    def drafters(
+        self,
+        model: Any,
+        *,
+        drafter: Any,
+        dflash_drafter: Any,
+        plain_verify: bool,
+        kv_format: str,
+    ) -> Drafters:
+        """The layer's head and DFlash batch for these drafter arguments, with its default draft width."""
+        ...
+
+    def decode_set(self, kv_format: str, dflash: Any = None) -> Any:
+        """The batch rows join: the DFlash batch when there is one, else the layer's own decode set."""
+        ...
+
 
 class PackedLayer:
     """Qwen3.5 family (dense and MoE): ``forward.py`` packed rows, ``DecodeBatch`` slot buffers."""
@@ -68,9 +100,8 @@ class PackedLayer:
 
     @classmethod
     def supports(cls, lm: Any) -> bool:
-        return forward.supports(
-            lm
-        )  # the packed arm of driver.py:466 (the else branch there)
+        # structural only (dense SwiGLU / Qwen3.5-MoE MLPs); the engine adds the spec family and the lane self-test
+        return forward.supports(lm)
 
     def __init__(self, lm: Any) -> None:
         self.lm = lm
@@ -80,6 +111,37 @@ class PackedLayer:
 
     def logits(self, hidden: mx.array) -> mx.array:
         return forward.logits(self.lm, hidden)  # driver.py:576-581
+
+    def drafters(
+        self,
+        model: Any,
+        *,
+        drafter: Any,
+        dflash_drafter: Any,
+        plain_verify: bool,
+        kv_format: str,
+    ) -> Drafters:
+        from .mtp import MTPHead
+
+        head = MTPHead(drafter, self.lm, self.logits) if drafter is not None else None
+        dflash = None
+        if dflash_drafter is not None or (plain_verify and drafter is None):
+            from .. import tree_verify
+            from .dflash import DFlashBatch
+
+            if kv_format == "int8":
+                from ..kernels import int8_tile
+
+                int8_tile.install()
+                # fail loudly at load: no int8 tree-attention kernel installed means no int8 serve
+                # (the in-graph reference is test-only and never a fallback)
+                tree_verify.require_int8_kernels()
+            dflash = DFlashBatch(model, dflash_drafter, kv_format)
+        # MAX_DECODE_TOKENS - 1 (driver.py:71)
+        return Drafters(head, dflash, MAX_WINDOW - 1)
+
+    def decode_set(self, kv_format: str, dflash: Any = None) -> Any:
+        return dflash if dflash is not None else DecodeBatch(self.lm, kv_format)
 
 
 class FlashNextLayer:
@@ -110,6 +172,36 @@ class FlashNextLayer:
     def logits(self, hidden: mx.array) -> mx.array:
         return flashnext.logits(self.lm, hidden)  # driver.py:576-581
 
+    def drafters(
+        self,
+        model: Any,
+        *,
+        drafter: Any,
+        dflash_drafter: Any,
+        plain_verify: bool,
+        kv_format: str,
+    ) -> Drafters:
+        from .flashnext_dflash import FlashNextDFlash
+
+        head = (
+            flashnext.FlashNextHead(drafter, self.lm, self.logits)
+            if drafter is not None
+            else None
+        )
+        dflash = (
+            FlashNextDFlash(model, dflash_drafter, kv_format)
+            if dflash_drafter is not None
+            else None
+        )
+        return Drafters(head, dflash, flashnext.MAX_CHAIN - 1)
+
+    def decode_set(self, kv_format: str, dflash: Any = None) -> Any:
+        return (
+            dflash
+            if dflash is not None
+            else flashnext.FlashNextBatch(self.lm, kv_format)
+        )
+
 
 class GenericLayer:
     """Every other mlx-vlm family: the model's own upstream forward per row, no drafter (``generic.py``)."""
@@ -139,6 +231,28 @@ class GenericLayer:
 
     def logits(self, hidden: mx.array) -> mx.array:
         return hidden  # driver.py:576-581 (identity)
+
+    def drafters(
+        self,
+        model: Any,
+        *,
+        drafter: Any,
+        dflash_drafter: Any,
+        plain_verify: bool,
+        kv_format: str,
+    ) -> Drafters:
+        if (
+            drafter is not None
+            or dflash_drafter is not None
+            or flashnext.is_flash_next(self.lm)
+        ):
+            raise ValueError(
+                "round driver: the generic layer takes no drafter and no Flash-Next model"
+            )
+        return Drafters(None, None, 0)
+
+    def decode_set(self, kv_format: str, dflash: Any = None) -> Any:
+        return generic.GenericBatch(self.lm, kv_format)
 
 
 class LayerRegistry:

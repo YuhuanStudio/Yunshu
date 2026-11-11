@@ -65,6 +65,7 @@ from . import flashnext, generic, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, lane_forward, logits
+from .layer import FlashNextLayer, GenericLayer, PackedLayer
 
 logger = logging.getLogger(__name__)
 
@@ -450,9 +451,9 @@ class RoundDriver:
         max_draft: int | None = None,
         generic_layer: bool = False,
         row_drafters: Any = None,
+        layer: Any = None,
     ):
         from ..kernels.gdn_qk_eps import install_lossless_default
-        from .mtp import MTPHead
 
         install_lossless_default()
         # Fixed prefill span per prompt (ROUND_PREFILL_CHUNK in vlm_engine.py). While rows
@@ -491,12 +492,26 @@ class RoundDriver:
         ):  # a model object without a config (unit fakes)
             self._media_ids |= set(media_token_ids(model))
         self.stop_tokens = set(stop_tokens or ())
-        # Flash-Next (Qwen4: HC + QSA + GDN + MoE + PLE): the model side is round_driver/flashnext.py
-        # behind the same interface; everything else of the driver is shared.
-        self.flash = flashnext.is_flash_next(self.lm)
+        # The model layer (round_driver/layer.py) owns the family's head, DFlash batch, default draft width
+        # and decode set. ``generic_layer=`` builds the same layer the driver always built.
+        if generic_layer and layer is not None:
+            raise ValueError("round driver: pass layer= or generic_layer=, not both")
+        if layer is None:
+            if generic_layer:
+                layer = GenericLayer(self.lm)
+            elif flashnext.is_flash_next(self.lm):
+                layer = FlashNextLayer(self.lm)
+            else:
+                layer = PackedLayer(self.lm)
+        if layer.lm is not self.lm:
+            raise ValueError(
+                "round driver: the layer is bound to another language model"
+            )
+        self.layer = layer
+        self.flash = isinstance(layer, FlashNextLayer)
         # Generic layer: the model's own upstream forward, one call per row (``generic.py``); no drafter,
         # logits instead of hidden states. Mutually exclusive with the two packed model layers.
-        self.generic = bool(generic_layer)
+        self.generic = isinstance(layer, GenericLayer)
         # draft LM / Gemma-4 assistant drafters of the generic layer (``draftlm.RowDrafters``); n-gram otherwise
         self.row_drafters = row_drafters if self.generic else None
         if self.generic and (
@@ -505,67 +520,24 @@ class RoundDriver:
             raise ValueError(
                 "round driver: the generic layer takes no drafter and no Flash-Next model"
             )
-        # drafts per round: the Qwen3.5 window is up to MAX_WINDOW - 1 positions, a Flash-Next window is the
-        # pending token plus one draft (the packed verify's chain length; block 2 decodes fastest there)
-        self.max_draft = int(
-            max_draft
-            if max_draft is not None
-            else (
-                0
-                if self.generic
-                else flashnext.MAX_CHAIN - 1
-                if self.flash
-                else MAX_DECODE_TOKENS - 1
-            )
-        )
-        if self.generic:
-            self.head: Any = None
-        elif self.flash:
-            self.head = (
-                flashnext.FlashNextHead(drafter, self.lm, self._logits)
-                if drafter is not None
-                else None
-            )
-        else:
-            self.head = (
-                MTPHead(drafter, self.lm, lambda h: logits(self.lm, h))
-                if drafter is not None
-                else None
-            )
         prev = mx.set_cache_limit(CACHE_LIMIT)
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
-        self.dflash: Any = None
-        if self.flash and dflash_drafter is not None:
-            from .flashnext_dflash import FlashNextDFlash
-
-            self.dflash = FlashNextDFlash(model, dflash_drafter, kv_format)
-        if (
-            not self.flash
-            and not self.generic
-            and (dflash_drafter is not None or (plain_verify and drafter is None))
-        ):
-            from .. import tree_verify
-            from .dflash import DFlashBatch
-
-            if kv_format == "int8":
-                from ..kernels import int8_tile
-
-                int8_tile.install()
-                # fail loudly at load: no int8 tree-attention kernel installed means no int8 serve
-                # (the in-graph reference is test-only and never a fallback)
-                tree_verify.require_int8_kernels()
-            self.dflash = DFlashBatch(model, dflash_drafter, kv_format)
-        self.kv_format = kv_format
-        self.batch: Any = (
-            generic.GenericBatch(self.lm, kv_format)
-            if self.generic
-            else self.dflash
-            if self.dflash is not None
-            else flashnext.FlashNextBatch(self.lm, kv_format)
-            if self.flash
-            else DecodeBatch(self.lm, kv_format)
+        drafters = layer.drafters(
+            model,
+            drafter=drafter,
+            dflash_drafter=dflash_drafter,
+            plain_verify=plain_verify,
+            kv_format=kv_format,
         )
+        self.head: Any = drafters.head
+        self.dflash: Any = drafters.dflash
+        # drafts per round: the Qwen3.5 window is up to MAX_WINDOW - 1 positions, a Flash-Next window is the
+        # pending token plus one draft (the packed verify's chain length; block 2 decodes fastest there)
+        self.max_draft = int(max_draft if max_draft is not None else drafters.max_draft)
+        self.kv_format = kv_format
+        # the drafter batch (DFlash rows own their step) replaces the layer decode set when there is one
+        self.batch: Any = layer.decode_set(kv_format, self.dflash)
         # APC prefix cache (mlx_vlm ``APCManager``): a prompt starts from the
         # longest stored checkpoint (target KV + GDN state, plus the MTP
         # head's KV for rows that draft) and stores checkpoints at chunk

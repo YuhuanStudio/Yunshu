@@ -100,3 +100,49 @@ def test_declared_caps_match_the_census():
     assert FlashNextLayer.caps.lazy_head and not FlashNextLayer.caps.slot_decode
     assert GenericLayer.caps.identity_logits and GenericLayer.caps.ngram
     assert not GenericLayer.caps.per_token_rows
+
+
+def test_driver_builds_the_layer_its_flags_name(generic_lm, packed_lm, flash_lm):
+    # M1 C2: the old flags build the same layer, and the layer sets the driver's head, batch and draft width
+    from yunshu_engine.round_driver import driver as drv
+    from yunshu_engine.round_driver.generic import GenericBatch
+
+    generic_driver = drv.RoundDriver(generic_lm, generic_layer=True)
+    assert type(generic_driver.layer) is GenericLayer
+    assert isinstance(generic_driver.batch, GenericBatch)
+    assert generic_driver.generic and not generic_driver.flash
+    assert generic_driver.max_draft == 0 and generic_driver.head is None
+
+    packed_driver = drv.RoundDriver(packed_lm)
+    assert type(packed_driver.layer) is PackedLayer
+    assert not packed_driver.flash and not packed_driver.generic
+    assert packed_driver.max_draft == 7
+
+    flash_driver = drv.RoundDriver(SimpleNamespace(language_model=flash_lm))
+    assert type(flash_driver.layer) is FlashNextLayer
+    assert flash_driver.flash and flash_driver.max_draft == 1
+
+    explicit = drv.RoundDriver(generic_lm, layer=GenericLayer(generic_lm))
+    assert type(explicit.layer) is GenericLayer and isinstance(
+        explicit.batch, GenericBatch
+    )
+
+
+def test_layer_arguments_are_checked(generic_lm, packed_lm):
+    from yunshu_engine.round_driver import driver as drv
+
+    with pytest.raises(ValueError, match="not both"):
+        drv.RoundDriver(generic_lm, generic_layer=True, layer=GenericLayer(generic_lm))
+    with pytest.raises(ValueError, match="another language model"):
+        drv.RoundDriver(packed_lm, layer=PackedLayer(generic_lm))
+
+
+def test_drafters_contract_per_layer(generic_lm, packed_lm):
+    plain = dict(
+        drafter=None, dflash_drafter=None, plain_verify=False, kv_format="bf16"
+    )
+    assert GenericLayer(generic_lm).drafters(generic_lm, **plain).max_draft == 0
+    with pytest.raises(ValueError, match="generic layer"):
+        GenericLayer(generic_lm).drafters(generic_lm, **{**plain, "drafter": object()})
+    packed = PackedLayer(packed_lm).drafters(packed_lm, **plain)
+    assert packed.head is None and packed.dflash is None and packed.max_draft == 7
