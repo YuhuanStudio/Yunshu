@@ -191,3 +191,55 @@ def test_empty_source_and_missing_corpus_raise_instead_of_spinning(
     monkeypatch.setattr(conc_probe, "CORPUS", tmp_path / "missing")
     with pytest.raises(FileNotFoundError):
         conc_probe.filler(100, 0)
+
+
+class _TemplateTok(_WordTok):
+    """A word tokenizer whose chat template adds a fixed overhead (Gemma's rendered prompt added 129 tokens)."""
+
+    def __init__(self, overhead):
+        self.overhead = overhead
+
+    def apply_chat_template(self, msgs, tokenize=True, **kw):
+        return ["<tpl>"] * self.overhead + [
+            w for m in msgs for w in m["content"].split()
+        ]
+
+
+ASK = "\n\n---\nWrite a long essay. Keep writing at length."  # 9 words on _WordTok
+
+
+def test_fit_text_calibrates_to_a_large_template_overhead():
+    """2026-11-11 nax-gemma2 speed cell: a Qwen-sized prompt file served 1153 tokens for a 1024 label."""
+    tok = _TemplateTok(129)
+    body = " ".join(f"w{i}" for i in range(1500))
+    assert (
+        pl.served_tokens(tok, body + ASK) == 1500 + 9 + 129
+    )  # the unfixed file: label missed by 129
+    text = pl.fit_text(tok, body, 1024, suffix=ASK)
+    assert pl.served_tokens(tok, text) == 1024
+    assert text.endswith(ASK)
+
+
+def test_fit_text_keeps_text_within_tolerance_unchanged():
+    tok = _TemplateTok(0)
+    body = " ".join(f"w{i}" for i in range(1015))  # 1015 + 9 ask words = 1024 served
+    assert pl.fit_text(tok, body, 1024, suffix=ASK) == body + ASK
+
+
+def test_decode_prompt_is_calibrated_to_the_served_template(tmp_path, monkeypatch):
+    from scripts.research import tfbench
+
+    monkeypatch.setattr(tfbench, "PROMPT_VARIANT_DIR", tmp_path)
+    monkeypatch.delenv("TFB_EXACT_PROMPTS", raising=False)
+    body = " ".join(f"w{i}" for i in range(1500))
+    monkeypatch.setattr(
+        tfbench, "load_variant_prompt", lambda name, variant=0: body + ASK
+    )
+    tok = _TemplateTok(129)
+    assert pl.served_tokens(tok, body + ASK) != 1024  # what the old decode path sent
+    text = tfbench.decode_prompt("prose", 1024, False, 0, tok=tok)
+    assert pl.served_tokens(tok, text) == 1024
+    assert text.endswith(ASK)
+    assert (
+        tfbench.decode_prompt("prose", 1024, False, 0) == body + ASK
+    )  # no tokenizer: file as before

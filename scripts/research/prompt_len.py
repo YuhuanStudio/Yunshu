@@ -110,6 +110,18 @@ def build_text(tok, source, target, suffix="", media_tokens=0, system=None, **kw
     raise ValueError(f"cannot construct served length {target}")
 
 
+def fit_text(tok, body, label, suffix="", tol=None, media_tokens=0, system=None, **kw):
+    """body + suffix, calibrated to this tokenizer + template: unchanged when its served length is within tol of
+    label, else rebuilt from body so the served length is exactly label (suffix kept at the end)."""
+    text = body + suffix
+    tol = default_tol(label) if tol is None else tol
+    if abs(served_tokens(tok, text, media_tokens, system, **kw) - label) <= tol:
+        return text
+    return build_text(
+        tok, body, label, suffix=suffix, media_tokens=media_tokens, system=system, **kw
+    )
+
+
 def filler_source(n_chars):
     return (FILLER * (n_chars // len(FILLER) + 1))[:n_chars]
 

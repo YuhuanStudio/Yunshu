@@ -1304,7 +1304,7 @@ def prompt_file_sha256(kind, ctx, smoke=False, variant=0):
     ).hexdigest()
 
 
-def decode_prompt(kind, ctx, long_ask, variant=0):
+def decode_prompt(kind, ctx, long_ask, variant=0, tok=None):
     text = load_variant_prompt(f"{kind}-{ctx}", variant)
     if os.environ.get("TFB_EXACT_PROMPTS") == "1":
         from snapshot_prompts import assert_chat_prompt
@@ -1313,7 +1313,18 @@ def decode_prompt(kind, ctx, long_ask, variant=0):
         if long_ask and LONG_ASK not in text:
             raise AssertionError("exact prompt lacks LONG_ASK")
         return text
-    return text + (LONG_ASK if long_ask else "")
+    full = text + (LONG_ASK if long_ask else "")
+    if tok is None:
+        return full
+    # the prompt files were sized with the Qwen template; calibrate to the served model's tokenizer + template
+    cut = text.rfind(DECODE_ASK_MARKER)
+    if cut < 0:  # a variant file without the ask: the length check below decides
+        return full
+    tol = pl.default_tol(ctx) + (LONG_ASK_ALLOW if long_ask else 0)
+    return pl.fit_text(tok, text[:cut], ctx, suffix=full[cut:], tol=tol)
+
+
+DECODE_ASK_MARKER = "\n\n---\n"
 
 
 def make_prompt(kind, ntok, salt, tok=None):
@@ -1939,6 +1950,7 @@ def part_decode(s, out, a):
     )
     n_dec = int(a.decode_tokens)
     ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
+    tok = None if a.smoke else pl.load_tokenizer(a.model)
     thinking, media = getattr(a, "thinking", "off"), getattr(a, "media", "none")
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
@@ -1951,7 +1963,7 @@ def part_decode(s, out, a):
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else decode_prompt(base_kind, ctx, a.long_ask, base_variant)
+                else decode_prompt(base_kind, ctx, a.long_ask, base_variant, tok=tok)
             )
             reply = ""
             order = [p for p in ("cold", "warm", "turn2", "restart") if p in phases]
