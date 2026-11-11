@@ -1,8 +1,8 @@
 {
   "_doc": "Path-parity matrix. Every optimization or capability, on every serving path where it applies: engaged (with evidence), na (with reason), partial/missing (with owner and impact). tests/unit/test_path_parity.py enforces it; see that test for the rules. A new optimization module or performance setting fails CI until it has a row here.",
   "paths": {
-    "batch": "Round driver, the unified runner for text requests of the dense Qwen3.5 family and of Flash-Next (Qwen4): spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
-    "generic": "Round driver, generic layer (round_driver/generic.py): every other mlx-vlm family (Gemma, Omni thinker, qwen3_5_moe, ...) on the model's own upstream forward, one call per row, no drafter and no packed kernels; also the paravirtual-Metal and no-lane-matmul hosts",
+    "batch": "Round driver, the unified runner for text requests of the Qwen3.5 family (dense and MoE) and of Flash-Next (Qwen4): spec on or off, one row or many (round_driver/; replaces the speculative lane and the shared batch for them)",
+    "generic": "Round driver, generic layer (round_driver/generic.py): every other mlx-vlm family (Gemma, Omni thinker, ...) on the model's own upstream forward, one call per row, no drafter and no packed kernels; also the paravirtual-Metal and no-lane-matmul hosts",
     "text": "Text-only mlx-lm single-request fast path (_generate_fast)"
   },
   "features": {
@@ -56,7 +56,7 @@
       "cells": {
         "batch": {
           "s": "partial",
-          "why": "DFlash driver rows verify copy chains from a per-row CopyDrafter inside the fair 32-node budget; MTP driver rows draft through the head only",
+          "why": "Dense and MoE Qwen3.5 DFlash rows verify copy chains from a per-row CopyDrafter inside the fair 32-node budget (dflash.py join); Flash-Next DFlash rows build no copier (flashnext_dflash.py join overrides it); MTP driver rows draft through the head only",
           "owner": "decode16",
           "impact": "low",
           "ev": [
@@ -216,7 +216,7 @@
       "cells": {
         "batch": {
           "s": "partial",
-          "why": "DFlash driver rows report logprobs while drafting; MTP driver rows with logprobs run one token a step",
+          "why": "DFlash and MTP driver rows with logprobs draft (each window row's log-softmax is reduced on its own, driver.row_logprobs; ROUND_DRIVER.md)",
           "owner": "decode16",
           "impact": "low",
           "ev": [
@@ -251,8 +251,8 @@
       "what": "repetition/presence/frequency penalty, logit_bias, min_tokens, suppress, ignore_eos while drafting (ProcessorWindow: per-row processors in a serial-arithmetic verify window)",
       "cells": {
         "batch": {
-          "s": "missing",
-          "why": "rows with processors run one token a step through their own sampler",
+          "s": "partial",
+          "why": "rows with processors draft through the window when windowable (driver.py: masks, repetition, at most one frequency/presence penalty); the DFlash fast tree takes only a sole frequency/presence penalty, other processors verify on a chain",
           "owner": "decode16",
           "impact": "high"
         },
@@ -555,8 +555,8 @@
           "why": "the driver restores and stores exact hybrid checkpoints for every request it serves (every request of every model)"
         },
         "generic": {
-          "s": "missing",
-          "why": "families with a sliding-window cache (Gemma) get no APC at all (has_sliding_window gate); apcomni is working on checkpoint stores",
+          "s": "partial",
+          "why": "families with a sliding-window cache get no APC except gemma4 (vlm_engine.py _build_batch_runner: model_apc_plan.restorable and (model_type == gemma4 or no sliding window)); apcomni is working on checkpoint stores",
           "owner": "apcomni",
           "impact": "high"
         },
@@ -1912,6 +1912,8 @@
     "python/yunshu_engine/auto_tuner.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan (parameter tuning/SLO), needs an owner. Restored from history at T0 correction."
   },
   "settings": {
+    "YUNSHU_GENERIC_LANE": "lane_linear",
+    "YUNSHU_QWEN4_PREFILL_STEP": "prefill_stride_rule",
     "YUNSHU_MTP": "draft_family_coverage",
     "YUNSHU_VLM_DRAFT": "draft_family_coverage",
     "YUNSHU_MTP_BLOCK_SIZE": "cost_aware_depth",
@@ -2531,7 +2533,7 @@
       },
       "logprobs": {
         "s": "partial",
-        "why": "DFlash driver rows report logprobs while drafting; MTP driver rows with logprobs run one token a step",
+        "why": "DFlash and MTP driver rows with logprobs draft (each window row's log-softmax is reduced on its own, driver.row_logprobs; ROUND_DRIVER.md)",
         "owner": "phaseE",
         "impact": "medium"
       },
@@ -3131,7 +3133,7 @@
       },
       "logprobs": {
         "s": "partial",
-        "why": "DFlash driver rows report logprobs while drafting; MTP driver rows with logprobs run one token a step",
+        "why": "DFlash and MTP driver rows with logprobs draft (each window row's log-softmax is reduced on its own, driver.row_logprobs; ROUND_DRIVER.md)",
         "owner": "phaseE",
         "impact": "medium"
       },

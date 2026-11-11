@@ -196,7 +196,7 @@ const settingdesc = {
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
   YUNSHU_SPEC_COPY_ROWS:
-    "Qwen3.5-family DFlash drafts on the round driver: verify rows a prompt-copy round may use (copy drafts = rows - 1; values below 3 turn copy rounds off). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the request's prompt plus its generated text; the copied drafts are checked by the same verify, so output is unchanged (greedy: identical to plain decode; sampled: keyed-sampler exact). Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Rows under a plain guide or a forced token do not copy. The width is capped to the backend's certified verify width (32 for dense lane projections with compatible tile attention, 8 otherwise) and to the driver's 32-row pack. Default 32 rows (2026-10-20 32K screen, DFlash code +14.5%, identical output). MTP-drafted rows on the round driver have no prompt-copy drafter, so this value does not change them.",
+    "Dense and MoE Qwen3.5-family DFlash drafts on the round driver (Flash-Next DFlash rows have no copy drafter): verify rows a prompt-copy round may use (copy drafts = rows - 1; values below 3 turn copy rounds off). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the request's prompt plus its generated text; the copied drafts are checked by the same verify, so output is unchanged (greedy: identical to plain decode; sampled: keyed-sampler exact). Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Rows under a plain guide or a forced token do not copy. The width is capped to the backend's certified verify width (32 for dense lane projections with compatible tile attention, 8 otherwise) and to the driver's 32-row pack. Default 32 rows (2026-10-20 32K screen, DFlash code +14.5%, identical output). MTP-drafted rows on the round driver have no prompt-copy drafter, so this value does not change them.",
   YUNSHU_DRAFT_BITS:
     "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter’s bytes per round but can lower acceptance.",
   YUNSHU_SPEC_TREE:
@@ -214,7 +214,7 @@ const settingdesc = {
   YUNSHU_JSON_SCHEMA_ENGINE:
     "Engine that masks JSON-schema and `json_object` constrained decoding: `llguidance` (about 0.25 ms median per-token mask on a 248K vocabulary; properties in schema order) or `inhouse` (Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when it supports it.",
   YUNSHU_GRAMMAR_BITMASK:
-    "Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler.",
+    "Text engine only: constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler (round-driver constraints are llguidance-based and ignore it).",
   YUNSHU_GRAMMAR_PREWARM:
     "Build the llguidance token tables in the background when a model loads, so the first constrained request does not spend about a second walking the vocabulary. Costs about 0.45 GiB of native heap per mask width; 0 builds them on first use.",
   YUNSHU_QUANT_MODE:

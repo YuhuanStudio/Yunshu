@@ -18,7 +18,7 @@ description: 雲樞如何以 DFlash2 或 MTP head 每步起草並驗證多個 to
 
 其他起草來源：
 
-- **提示複製回合。** 回合可以直接提議接續內容：在請求的提示與已生成文字中，找出目前尾端最長的先前出現處，提議其後的內容。同樣交由驗證步驟檢查。`YUNSHU_SPEC_COPY_ROWS` 設定驗證列數（預設 32；`0` 關閉）。
+- **提示複製回合。** 回合可以直接提議接續內容：在請求的提示與已生成文字中，找出目前尾端最長的先前出現處，提議其後的內容。同樣交由驗證步驟檢查。`YUNSHU_SPEC_COPY_ROWS` 設定驗證列數（預設 32；`0` 關閉）。僅稠密與 MoE Qwen3.5；Flash-Next 的 DFlash 列沒有複製草稿器。
 - **草稿樹。** `YUNSHU_SPEC_TREE`（`auto`）對符合條件、使用 DFlash2 drafter 的 greedy 請求使用草稿樹驗證器。
 - **通用 round driver 層（沒有 packed 層的 mlx-vlm 家族）。** 對 greedy 請求以 `spec_decode`（或 `YUNSHU_NGRAM_DEFAULT`）啟用同一套 n-gram / suffix 推測，僅限單一解碼 row 且 KV cache 可 trim；保證為驗證器在視窗上的 top-1，與逐 token 解碼不保證逐位元相同。packed Qwen3.5 與 Flash-Next 維持批次不變的驗證。
 - **純文字 `mlx-lm` 模型。** 對 greedy 請求的無損 n-gram 或 suffix 推測（`YUNSHU_NGRAM_DEFAULT`，預設關閉；請求也可用 `spec_decode` 要求；`YUNSHU_SPEC_PROPOSER` 為 `ngram` 或 `suffix`），以及 Gemma 4 文字模型的 assistant drafter 目錄（`YUNSHU_GEMMA4_ASSISTANT`）。

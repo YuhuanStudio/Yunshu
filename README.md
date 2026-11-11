@@ -65,10 +65,10 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Text-model speculation](docs/guides/INFERENCE.md) | n-gram / suffix drafting for mlx-lm models and the round driver's generic layer, per request (`spec_decode`) or by default (`YUNSHU_NGRAM_DEFAULT`); Gemma 4 assistant and draft-LM drafters are opt-in (`YUNSHU_GEMMA4_ASSISTANT`, `YUNSHU_DRAFT_MODEL`); the text-engine external draft stays experimental (`YUNSHU_SPEC_UNVERIFIED`) |
 | [Prefix cache (APC)](docs/guides/KV_CACHE_MATRIX.md) | exact hybrid checkpoints in RAM, SSD and optional storage tiers; image and audio keys |
 | [Structured output](docs/guides/INFERENCE.md) | JSON schema, regex, choice and grammar enforced during decoding, including tool arguments |
-| [Lossy memory options](docs/guides/INFERENCE.md) | int8 KV, compressed WARM tier and load-time quantization; off by default |
+| [Lossy memory options](docs/guides/INFERENCE.md) | int8 KV (`YUNSHU_KV_PRECISION`: packed Qwen3.5 layer only; `YUNSHU_KV_QUANT_BITS`: text engine only), compressed WARM tier and load-time quantization; off by default |
 | [Large MoE loading (partial)](docs/guides/INFERENCE.md) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading |
 | [Neural Engine FFN split (experimental, lossy)](docs/guides/ANE_FFN_SPLIT.md) | opt-in W8A8 share of each dense FFN layer on the Apple Neural Engine beside the GPU during 27B prefill (Splash scheme); cold TTFT -5 to -10% |
-| [Round driver](docs/guides/ROUND_DRIVER.md) | every mlx-vlm model is served here; multi-row speculative decoding for Qwen3.5-family models (dense and MoE) and Qwen3.8-Flash-Next: concurrent requests draft too (MTP chains, DFlash2 trees and copy chains), spec on equals spec off |
+| [Round driver](docs/guides/ROUND_DRIVER.md) | every mlx-vlm model is served here; multi-row speculative decoding for Qwen3.5-family models (dense and MoE) and Qwen3.8-Flash-Next: concurrent requests draft too (MTP chains, DFlash2 trees, and prompt-copy chains on dense and MoE Qwen3.5 only; Flash-Next has no copy drafter; MoE identity is not yet measured on a real checkpoint), spec on equals spec off |
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
 | [Follow-up turns](docs/guides/INFERENCE.md) | a follow-up resumes from the previous reply's decode cache (`YUNSHU_NEXT_TURN_PREFILL=decode`, default; may differ numerically from a cold re-prefill); `exact` is the bit-identical re-prefill; `stride` rehearses the reply into APC checkpoints |
 | [Multi-row speculation](docs/guides/ROUND_DRIVER.md) | Every request is a round-driver row; on Qwen3.5-family and Flash-Next models concurrent rows draft too (MTP chains, DFlash2 drafts sharing a verify budget) |
@@ -278,7 +278,8 @@ together, alone or among others:
 - **MTP** — the checkpoint's own multi-token-prediction head; the fallback when no drafter is present.
 - **Prompt-copy drafting** — when the output starts repeating text from the prompt (code edits,
   quoting tool results, multi-turn agents), the drafter proposes the continuation of that earlier text
-  and verifies it in the same pass (`YUNSHU_SPEC_COPY_ROWS`, default 32 rows; `0` turns it off).
+  and verifies it in the same pass (`YUNSHU_SPEC_COPY_ROWS`, default 32 rows; `0` turns it off). Dense and MoE
+  Qwen3.5 only: Flash-Next's DFlash rows have no copy drafter.
 
 Every decode and verify matmul goes through **batch-invariant kernels**: a token's arithmetic is the
 same whether it is verified alone or among other rows. That is what makes greedy output identical

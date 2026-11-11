@@ -58,10 +58,10 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [文字模型推测](docs/guides/INFERENCE.md) | n-gram / suffix 草稿，用于 mlx-lm 模型与 round driver 的通用层，逐请求（`spec_decode`）或默认（`YUNSHU_NGRAM_DEFAULT`）启用；Gemma 4 assistant 与 draft LM 草稿需明确开启（`YUNSHU_GEMMA4_ASSISTANT`、`YUNSHU_DRAFT_MODEL`）；文本引擎的外部草稿仍为实验（`YUNSHU_SPEC_UNVERIFIED`） |
 | [前缀缓存（APC）](docs/guides/KV_CACHE_MATRIX.md) | 混合模型的精确 checkpoint，位于 RAM、SSD 与可选存储层；图片与音频键 |
 | [结构化输出](docs/guides/INFERENCE.md) | JSON schema、regex、选项与文法在解码时强制，含工具参数 |
-| [有损内存选项](docs/guides/INFERENCE.md) | int8 KV、压缩 WARM 层与载入时量化；默认关闭 |
+| [有损内存选项](docs/guides/INFERENCE.md) | int8 KV（`YUNSHU_KV_PRECISION`：仅 packed Qwen3.5 层；`YUNSHU_KV_QUANT_BITS`：仅文字引擎）、压缩 WARM 层与载入时量化；默认关闭 |
 | [大型 MoE 加载（部分）](docs/guides/INFERENCE.md) | 社区 DeepSeek-V4-Flash 权重包的位数与 group size 由张量形状推得；加载前有容纳检查 |
 | [Neural Engine FFN 分担（实验、有损）](docs/guides/ANE_FFN_SPLIT.md) | 可选：27B prefill 时，把每层稠密 FFN 的 W8A8 一部分交给 Apple Neural Engine 与 GPU 并行（Splash 方案）；冷 TTFT 约降 5 至 10% |
-| [Round driver](docs/guides/ROUND_DRIVER.md) | 每个 mlx-vlm 模型都由这里服务；Qwen3.5 系列（稠密与 MoE）与 Qwen3.8-Flash-Next 的多行推测解码：并行请求也会做草稿（MTP 链、DFlash2 树与复制链），推测开启与关闭输出相同 |
+| [Round driver](docs/guides/ROUND_DRIVER.md) | 每个 mlx-vlm 模型都由这里服务；Qwen3.5 系列（稠密与 MoE）与 Qwen3.8-Flash-Next 的多行推测解码：并行请求也会做草稿（MTP 链、DFlash2 树；复制链仅限稠密与 MoE Qwen3.5，Flash-Next 没有复制草稿器；MoE 在真实 checkpoint 上的一致性尚未实测），推测开启与关闭输出相同 |
 | [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
 | [后续轮次](docs/guides/INFERENCE.md) | 后续轮次从上一条回复的 decode 缓存接续（`YUNSHU_NEXT_TURN_PREFILL=decode`，默认；数值可能与冷重新预填不同）；`exact` 为逐位元相同的重新预填；`stride` 把回复预填成 APC checkpoint；`boundary` 会改变数值运算，须明确选用 |
 | [多行推测](docs/guides/ROUND_DRIVER.md) | 每个请求都是 round driver 的一个 row；Qwen3.5 系列与 Flash-Next 的并发 row 也会一起起草（MTP 链、共享验证预算的 DFlash2 草稿） |
@@ -257,7 +257,7 @@ Qwen3.5 家族与 Flash-Next 的每个请求都是 round driver 的一个 row，
 - **DFlash2**：独立的区块草稿模型，每轮提出多个 token；装了相符的草稿模型就自动使用。
 - **MTP**：checkpoint 自带的多 token 预测头；没有草稿模型时的后备。
 - **Prompt-copy 草稿**：当输出开始重复 prompt 里的文本（改代码、引用工具结果、多轮 agent），
-  草稿会提出那段文本的后续，并在同一次验证中检查（`YUNSHU_SPEC_COPY_ROWS`，设 `0` 关闭）。
+  草稿会提出那段文本的后续，并在同一次验证中检查（`YUNSHU_SPEC_COPY_ROWS`，设 `0` 关闭）。仅稠密与 MoE Qwen3.5：Flash-Next 的 DFlash 行没有复制草稿器。
 
 所有解码与验证的矩阵乘法都走**不随批次改变的 kernel**：一个 token 不论单独验证或和其他列一起验证，
 算术都相同。这让开关推测解码时的贪婪输出完全一致，采样输出在依位置决定的采样下也精确一致。

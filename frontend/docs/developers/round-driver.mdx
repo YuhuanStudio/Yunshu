@@ -69,7 +69,7 @@ A row's arithmetic does not depend on which rows share the step, how many drafts
 
 On the packed layers, drafting uses the checkpoint's MTP head, or the DFlash2 drafter when one is selected, for every draftable row. The head's KV is kept current every step, so any row can start drafting at any step. Draft depth per row comes from `round_driver/allocate.py` (TensorFold allocation rule, MIT): per-depth acceptance is tracked as an EMA, rows receive drafts greedily by marginal expected tokens, and the step keeps the allocation that maximizes expected committed tokens per millisecond using forward cost measured online. There are no row-count thresholds.
 
-Every row uses the model's `APCManager` prefix cache through `APCCoordinator` (checkpoint strategy) on every family without a sliding-window cache. Entries are salted by the model and processor identity (`VLMBatchRunner._driver_extra_hash`), so a prefix cached under one identity is cold under another.
+Every row uses the model's `APCManager` prefix cache through `APCCoordinator` (checkpoint strategy) on every family without a sliding-window cache, and on Gemma 4 (its exact-window snapshot). Entries are salted by the model and processor identity (`VLMBatchRunner._driver_extra_hash`), so a prefix cached under one identity is cold under another.
 
 ## Knobs
 

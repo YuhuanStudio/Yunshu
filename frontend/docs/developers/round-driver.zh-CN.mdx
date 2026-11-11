@@ -69,7 +69,7 @@ row 的运算不取决于哪些 row 共用该步、其他 row 验证多少草稿
 
 在 packed 层上，草稿使用 checkpoint 的 MTP head（或选定时的 DFlash2 草稿模型），对每个可做草稿的 row 都适用。head 的 KV 每一步都会更新，所以任何 row 在任何一步都能开始做草稿。每个 row 的草稿深度来自 `round_driver/allocate.py`（TensorFold 的分配规则，MIT）：以 EMA 追踪每个深度的接受率，依边际期望 token 数贪婪地分配草稿，并选择每毫秒期望提交 token 数最大的分配，forward 成本是在运行中在线测量的。不使用以 row 数为准的门槛。
 
-每个模型都使用 `APCManager` 前缀缓存，通过 `APCCoordinator`（checkpoint 策略），适用于所有没有 sliding-window 缓存的模型家族。条目以模型与 processor 的身份做盐值（`VLMBatchRunner._driver_extra_hash`），因此在一种身份下缓存的前缀，对另一种身份来说是冷的。
+每个模型都使用 `APCManager` 前缀缓存，通过 `APCCoordinator`（checkpoint 策略），适用于所有没有 sliding-window 缓存的模型家族，以及 Gemma 4（其精确窗口快照）。条目以模型与 processor 的身份做盐值（`VLMBatchRunner._driver_extra_hash`），因此在一种身份下缓存的前缀，对另一种身份来说是冷的。
 
 ## 设置
 

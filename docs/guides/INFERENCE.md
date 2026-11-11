@@ -11,7 +11,7 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 
 | Model | Path | Speculation | Prefix cache |
 |---|---|---|---|
-| Qwen3.5 / 3.6 / 3.8 family (mlx-vlm) | Round driver, packed Qwen3.5 layer | DFlash2, MTP, prompt-copy | exact hybrid checkpoints (APC) |
+| Qwen3.5 / 3.6 / 3.8 family (mlx-vlm) | Round driver, packed Qwen3.5 layer | DFlash2, MTP, prompt-copy (not on Flash-Next) | exact hybrid checkpoints (APC) |
 | Other mlx-vlm models | round driver, generic layer | none | APC where the cache layout allows it (including checkpoint-specific exact-window support; see model support) |
 | Text-only mlx-lm models | single-request fast path | optional n-gram / suffix, Gemma 4 assistant, external draft (experimental) | mlx-lm prompt cache |
 
@@ -24,7 +24,8 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 - **MTP**: the checkpoint's own multi-token-prediction head (`YUNSHU_MTP`, on by default; block size
   `YUNSHU_MTP_BLOCK_SIZE`).
 - **Prompt-copy drafting**: proposes the continuation of text that already occurred in the prompt
-  (`YUNSHU_SPEC_COPY_ROWS`, default 32 verify rows; `0` disables).
+  (`YUNSHU_SPEC_COPY_ROWS`, default 32 verify rows; `0` disables). Dense and MoE Qwen3.5 only; Flash-Next's
+  DFlash rows have no copy drafter.
 - **Batch-invariant kernels** make verification arithmetic identical to ordinary decode, so greedy
   output with speculation on is token-identical to speculation off.
 - Override with `YUNSHU_VLM_DRAFT=mtp|off|<drafter path>`.
@@ -68,7 +69,7 @@ Qwen3.8-27B oQ4e-mtp + DFlash2: warm TTFT 1K 0.093 -> 0.011 s, 32K 0.166 -> 0.04
 `response_format` (`json_object`, strict `json_schema`), `regex`, `choice` and Lark `grammar` are
 enforced while decoding, including tool-call arguments. By default an in-house allowlist sampler is
 used, with llguidance for schemas outside its subset. Options: `YUNSHU_GRAMMAR_BITMASK=1`
-(xgrammar-style bitmask engine), `YUNSHU_JUMP_FORWARD=1` (emit grammar-forced tokens without a
+(xgrammar-style bitmask engine; text engine only, the round driver's constraints are llguidance-based and ignore it), `YUNSHU_JUMP_FORWARD=1` (emit grammar-forced tokens without a
 forward pass). Unsupported constructs are an error,
 not silently ignored. Responses report `x_yunshu.structured_output` (`requested`, `enforced`, engine).
 Limit: enforcement guarantees the grammar, not that a `max_tokens` cut-off output is complete.
@@ -99,7 +100,8 @@ default. Qwen3.8-27B: thinking 1.0 / 0.95 / 20 / presence 0, non-thinking 0.7 / 
 
 | Setting | Effect |
 |---|---|
-| `YUNSHU_KV_PRECISION=int8` | int8 KV for the Qwen3.5-family shared decode batch; smaller memory and bandwidth, small attention error |
+| `YUNSHU_KV_PRECISION=int8` | int8 KV for the packed Qwen3.5 layer's decode rows (dense and MoE); Flash-Next and generic VLM layers stay bf16; smaller memory and bandwidth, small attention error |
+| `YUNSHU_KV_QUANT_BITS` | KV quantization on the text engine only (mlx-lm fast path); VLM rows stay bf16 |
 | `YUNSHU_VLM_APC_WARM=int8\|int4` | compressed WARM prefix tier (`lossless` is exact) |
 | `YUNSHU_QUANT_MODE` | quantize weights at load (mxfp4, nvfp4, mxfp8, affine) |
 
