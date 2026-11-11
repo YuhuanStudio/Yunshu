@@ -422,6 +422,40 @@ def _release_quiet_hold(job: dict, now: float) -> None:
         )
 
 
+MEM_HOLD_MAX_S = float(os.environ.get("GPUQ_MEM_HOLD_MAX_S", 60))
+
+
+def _hold_for_memory(jobs: list[dict], blockers: dict, winner, now: float):
+    """Head-of-line memory hold on a free lane: a higher-priority job blocked only by memory gets
+    up to MEM_HOLD_MAX_S for the previous job's memory to be reclaimed before lower-priority work
+    takes the slot (2026-11-11: a p3 60 GB probe waited 90 min while 14 GB p2 jobs started at every
+    release, each admitted the instant memory looked short)."""
+    head = _pick(
+        jobs,
+        lambda j: j["id"] in blockers and blockers[j["id"]] in (None, "mem"),
+        interleave=False,
+    )
+    if head is None or blockers.get(head["id"]) != "mem":
+        return winner
+    if winner is not None and int(winner.get("priority", 0)) >= int(
+        head.get("priority", 0)
+    ):
+        return winner
+    started = head.get("mem_hold_started")
+    if started is None:
+        started = now
+        head["mem_hold_started"] = now
+        _patch_job(JOBS / f"{head['id']}.json", mem_hold_started=now)
+        _dlog("memory hold start", job=head["id"], label=head.get("label"))
+    if now - float(started) < MEM_HOLD_MAX_S:
+        return None
+    # memory stayed short for the whole hold: let one smaller job run, hold again at its release
+    head["mem_hold_started"] = None
+    _patch_job(JOBS / f"{head['id']}.json", mem_hold_started=None)
+    _dlog("memory hold timeout", job=head["id"], label=head.get("label"))
+    return winner
+
+
 def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
     """Pick by priority/fairness before CPU admission; a quiet winner owns the slot."""
     pending = [
@@ -439,6 +473,8 @@ def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
         interleave=not preempt,
     )
     now = _now()
+    if not preempt:
+        winner = _hold_for_memory(jobs, blockers, winner, now)
     for job in pending:
         if job is not winner:
             _release_quiet_hold(job, now)

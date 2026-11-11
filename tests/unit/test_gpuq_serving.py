@@ -609,3 +609,31 @@ def test_interleaved_short_job_is_never_paused_for_priority(q, monkeypatch):
         q._patch_job(path, cancel=True)
         q._patch_job(hp, cancel=True)
         t.join(8)
+
+
+def test_memory_blocked_head_holds_a_free_lane_briefly(q, prod, monkeypatch):
+    """2026-11-11: a p3 60 GB probe waited 90 min while 14 GB p2 jobs took every release; the
+    head now holds the free lane up to MEM_HOLD_MAX_S, then lets one smaller job run and holds again."""
+    g = _gate(q, prod, reserve_gb=16)
+    g.poll()
+    time.sleep(0.35)
+    g.poll()
+    big, _ = _job(q, ["true"], mem_gb=60, priority=3)
+    small, _ = _job(q, ["true"], mem_gb=14, priority=2)
+    # free 50 GB, reserve 16: the 60 GB head is memory-blocked, the 14 GB job is not
+    monkeypatch.setattr(
+        q, "_blocker", lambda job, gate, cpu=True: "mem" if job["mem_gb"] > 34 else None
+    )
+    monkeypatch.setattr(q, "_cpu_blocker", lambda job, gate: None)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "_now", lambda: clock[0])
+    jobs = [big, small]
+    assert (
+        q._admit(jobs, g) is None
+    )  # hold: the small job does not jump the memory-blocked head
+    clock[0] += q.MEM_HOLD_MAX_S + 1
+    assert (
+        q._admit(jobs, g)["id"] == small["id"]
+    )  # bounded: memory never freed, one small job runs
+    assert big.get("mem_hold_started") is None  # and the next release holds again
+    assert q._admit(jobs, g) is None
