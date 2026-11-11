@@ -47,6 +47,7 @@ from typing import Any, cast
 import mlx.core as mx
 
 from . import gc_policy, netguard, next_turn, settings
+from .engine_templates import EngineTemplatesMixin
 from .memory_admission import (
     MEMORY_LIMIT_MARK,
     MemoryAdmissionError,
@@ -1188,7 +1189,10 @@ class VLMEngine:
             )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
-            await self._settle_rehearsal_early(messages, _enable_thinking, tpl_extra)
+            _raw_text = self._raw_prompt_text(messages, kwargs)
+            await self._settle_rehearsal_early(
+                messages, _enable_thinking, tpl_extra, raw=_raw_text is not None
+            )
 
             _runner_extras: dict = {}
             runner_params = self._runner_kwargs(
@@ -1219,7 +1223,12 @@ class VLMEngine:
                 _marks = getattr(_latency_info, "latency_marks", {})
                 _marks["template_start"] = time.perf_counter()
                 ids, pkw, salt = self._runner_input(
-                    messages, image_paths, audio_paths, _enable_thinking, tpl_extra
+                    messages,
+                    image_paths,
+                    audio_paths,
+                    _enable_thinking,
+                    tpl_extra,
+                    raw_text=_raw_text,
                 )
                 self._settle_rehearsal(ids)
                 _marks["template_end"] = time.perf_counter()
@@ -1545,7 +1554,10 @@ class VLMEngine:
             )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
-            await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
+            _raw_text = self._raw_prompt_text(messages, kwargs)
+            await self._settle_rehearsal_early(
+                messages, enable_thinking, tpl_extra, raw=_raw_text is not None
+            )
         except BaseException:
             # Nothing below owns these files yet: a bad request, a failed decode or a
             # cancel while extracting must not leave decoded media on disk.
@@ -1607,7 +1619,12 @@ class VLMEngine:
             _marks = getattr(_latency_info, "latency_marks", {})
             _marks["template_start"] = time.perf_counter()
             ids, pkw, salt = self._runner_input(
-                messages, image_paths, audio_paths, enable_thinking, tpl_extra
+                messages,
+                image_paths,
+                audio_paths,
+                enable_thinking,
+                tpl_extra,
+                raw_text=_raw_text,
             )
             self._settle_rehearsal(ids)
             _marks["template_end"] = time.perf_counter()
@@ -1838,7 +1855,11 @@ class VLMEngine:
         )
 
     async def _settle_rehearsal_early(
-        self, messages: list[dict], enable_thinking: bool | None, tpl_extra: dict | None
+        self,
+        messages: list[dict],
+        enable_thinking: bool | None,
+        tpl_extra: dict | None,
+        raw: bool = False,
     ) -> None:
         """A request arrived: adopt or cancel the running rehearsal BEFORE queueing behind it.
 
@@ -1856,7 +1877,7 @@ class VLMEngine:
             )
             for m in messages
         )
-        if has_media or not state.submitted:
+        if raw or has_media or not state.submitted:
             # media, or no work running yet (the start delay): nothing to adopt, no tokens needed
             state.cancel_event.set()
             return
@@ -1902,6 +1923,8 @@ class VLMEngine:
         mode = settings.get("YUNSHU_NEXT_TURN_PREFILL")
         if mode in (None, False, "", "off", "boundary", "decode"):
             return  # decode: the runner stored the reply's decode cache when it ended
+        if kwargs.get("raw_prompt"):
+            return  # a raw /v1/completions prompt is not a chat turn to rehearse
         reason = next_turn.ineligible_reason(
             finish_reason=finish_reason,
             completion_tokens=completion_tokens,
@@ -3395,6 +3418,16 @@ class VLMEngine:
                 "cannot be prepared (see load-time logs)"
             )
 
+    @staticmethod
+    def _raw_prompt_text(messages: list[dict], kwargs: dict) -> str | None:
+        """The text of a ``/v1/completions`` string prompt (sent as-is, no chat template),
+        or None for a chat prompt."""
+        if not kwargs.get("raw_prompt"):
+            return None
+        if len(messages) != 1 or not isinstance(messages[0].get("content"), str):
+            raise ValueError("raw_prompt needs exactly one string prompt")
+        return messages[0]["content"]
+
     def _runner_input(
         self,
         messages: list[dict],
@@ -3402,9 +3435,14 @@ class VLMEngine:
         audio_paths: list[str],
         enable_thinking: bool | None,
         template_extra: dict | None,
+        raw_text: str | None = None,
     ):
         """Template + tokenize (and encode media) for one request on the MLX
         thread. Returns ``(token_ids, prompt_kwargs, apc_semantic_hash)``."""
+        if raw_text is not None:
+            # Raw completion: tokenize the string exactly as the text engines do.
+            ids = EngineTemplatesMixin._encode_prompt(self._tokenizer, raw_text)
+            return self._non_empty_ids(list(ids)), None, None
         if image_paths or audio_paths:
             prompt = self._apply_vlm_template_with_cache(
                 messages,

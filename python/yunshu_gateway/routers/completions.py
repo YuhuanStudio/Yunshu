@@ -121,6 +121,17 @@ def _normalize_prompts(prompt, tokenizer) -> list[str]:
     return [str(prompt)]
 
 
+def _raw_prompt_kwargs(engine) -> dict:
+    """Extra engine kwargs that keep a string prompt raw (no chat template).
+
+    BatchedEngine already tokenizes a str prompt as raw text and takes no extra kwargs;
+    VLMEngine wraps a str as a user turn unless told otherwise.
+    """
+    from yunshu_engine.batched_engine import BatchedEngine
+
+    return {} if isinstance(engine, BatchedEngine) else {"raw_prompt": True}
+
+
 def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
     """Record token counts to metrics middleware + tracing counters for completions.
 
@@ -705,6 +716,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     )
             else:
                 state = await engine.generate(
+                    **_raw_prompt_kwargs(engine),
                     prompt=_prompt,
                     max_tokens=req.effective_max_tokens(),
                     temperature=req.temperature,
@@ -1266,6 +1278,7 @@ async def _stream_completion(
                 )
         else:
             async for output in engine.generate_stream(
+                **_raw_prompt_kwargs(engine),
                 prompt=prompt,
                 max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,

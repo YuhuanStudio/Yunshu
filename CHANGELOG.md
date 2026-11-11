@@ -53,6 +53,7 @@ patch release collects them.
 - M5: NAX prefill and the prefill attention tiles were enabled only on a device named exactly "Apple M5 Max" with MLX 0.32.3/0.32.4; every M5-generation GPU (M5, M5 Pro, M5 Max) and newer MLX builds whose kernel ABI check passes now use them. Qwen3.5-family models of every size get NAX prefill (it was limited to the 27B shape).
 - Idle memory: a heartbeat that fired just before the idle trim could re-wire GPU memory after the trim had released it. The trim now ends the heartbeat window.
 - mlx 0.32.4 quantized matvec summed in a promoted float type and mlx-vlm 0.7.12 changed the q/k-norm epsilon; both are corrected in-house so speculation on and off stay identical.
+- `/v1/completions` on VLM models: a string prompt was wrapped in the chat template as a user turn (28 extra tokens on Qwen2.5). It is now raw text on every engine, as the text models already were; chat and Messages keep the template.
 
 ### Security
 
