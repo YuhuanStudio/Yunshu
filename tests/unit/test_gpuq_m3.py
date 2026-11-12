@@ -937,6 +937,26 @@ def test_untracked_test_file_keeps_any_job_off_laptop(queue, checkouts, monkeypa
         queue.submit(["true", str(new)], "untracked-m3", 1, 0, device="m3")
 
 
+def test_runtime_data_inside_checkout_home_does_not_refuse(
+    queue, checkouts, monkeypatch
+):
+    """ci-local runs the suite in a clean checkout with HOME and pytest tmp dirs inside it: data a
+    test writes there (extensionless telemetry/out/quiet, a .jsonl) is not a source file the laptop
+    must run, so it must not refuse the job (2026-11-12 ci-local: 17 failures on this rule)."""
+    main, _ = checkouts
+    run = main / "home" / "tmp" / "sandbox1"
+    (run / "out").mkdir(parents=True)
+    (run / "telemetry").write_text("t\n")
+    (run / "quiet").write_text("q\n")
+    (run / "rows.jsonl").write_text("{}\n")
+    monkeypatch.chdir(main)
+    args = [str(run / "telemetry"), str(run / "out"), str(run / "rows.jsonl")]
+    jid = queue.submit(["true", *args], "runtime-data", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] == []
+    assert queue._m3_eligible(row)
+
+
 def test_clean_main_checkout_job_still_goes_to_laptop(queue, checkouts, monkeypatch):
     """Regression guard: tracked files of the main checkout, a checkpoint and a .venv
     interpreter (mapped to the laptop's venv) do not refuse an any job."""

@@ -206,10 +206,19 @@ def _tracked(top, path):
     )
 
 
+# Source the laptop runs (scripts, tests, modules). Data a job writes or reads (extensionless
+# telemetry, output directories, .jsonl rows) is not synced by git and must not refuse a job.
+SOURCE_SUFFIXES = frozenset({".py", ".sh", ".toml", ".yaml", ".yml"})
+
+
+def _is_source_file(path):
+    return os.path.isfile(path) and Path(path).suffix in SOURCE_SUFFIXES
+
+
 def source_tree_refusals(cmd, env, cwd):
     """Reasons the laptop cannot run a job from its one synced source tree. The laptop gets the
     job's checkout (or verify tree) at HEAD plus tracked edits, so refused: a named path in
-    another checkout or worktree, and a named path that exists but is untracked (2026-11-12:
+    another checkout or worktree, and a named source file (SOURCE_SUFFIXES) that is untracked (2026-11-12:
     several jobs lost a queue round to rc=4 'file or directory not found' on the laptop).
     Paths that are not in a checkout (checkpoints, outputs, devices) and .venv interpreters,
     which the laptop maps to its own venv, are not checked."""
@@ -242,7 +251,7 @@ def source_tree_refusals(cmd, env, cwd):
                 continue
             if top != src:
                 reasons.append(f"{path} is in {top}, not the job's source tree {src}")
-            elif os.path.exists(path) and not _tracked(src, path):
+            elif _is_source_file(path) and not _tracked(src, path):
                 reasons.append(f"{path} is untracked in {src}")
     return reasons
 
