@@ -802,3 +802,64 @@ def test_tfbench_prompt_directory_is_copied_as_job_input(monkeypatch, tmp_path):
     }
     monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "x86_64\n")
     assert gpuq_remote.m3_input_refusals(cmd, {}) == []  # directories are not dylibs
+
+
+def test_tfb_out_directory_is_collected_back(queue, monkeypatch, tmp_path):
+    """The round profile reads its engine logs from TFB_OUT/out, and no --out names them: a
+    collect with the cell file alone left the logs on the laptop (2026-11-12, 18 GPU-min lost)."""
+    import gpuq_remote
+    from gpuq_remote import Remote
+
+    build = tmp_path / "build"
+    tfb = build / "verify" / "runs" / "r" / "tfb" / "round_profile.cand-c1024-gaps"
+    cell = (
+        build
+        / "verify"
+        / "runs"
+        / "r"
+        / "cells"
+        / "round_profile.cand-c1024-gaps.a1.jsonl"
+    )
+    monkeypatch.setattr(gpuq_remote, "BUILD", str(build))
+    monkeypatch.setattr("subprocess.check_output", _toplevel_of)
+    job = dict(
+        id="prof",
+        cwd=MAIN_CHECKOUT,
+        cmd=["env", f"TFB_OUT={tfb}", "python", "tfbench.py", "--out", str(cell)],
+        env={},
+        timeout_s=60,
+    )
+    remote = Remote(job, queue.JOBS / "prof.json", queue, None)
+    remote_tfb = (
+        remote.repo + "/.m3-home/out/verify/runs/r/tfb/round_profile.cand-c1024-gaps"
+    )
+    log_name = "server-yunshu-decode-0-round_profile-cand-c1024-gaps.log"
+    copies = []
+
+    def check(cmd, **kwargs):
+        if "[ -d" in " ".join(cmd):  # the collect probe: a directory only for TFB_OUT
+            return "directory" if remote_tfb in " ".join(cmd) else ""
+        return "/Users/yuhuan/Documents/YuhuanStudio/Yunshu\n"
+
+    def sync(self, src, dest, back=False, delete=True):
+        copies.append((src, dest, back))
+        if back and dest.endswith("/"):
+            Path(dest, "out").mkdir(parents=True, exist_ok=True)
+            Path(dest, "out", log_name).write_text("engine log\n")
+        elif back:
+            Path(dest).write_text('{"complete": true}\n')
+
+    monkeypatch.setattr("subprocess.check_output", check)
+    monkeypatch.setattr(Remote, "sync", sync)
+    path = queue.JOBS / "prof.json"
+    queue._write(path, job)
+    with (queue.LOGS / "prof.log").open("w") as log:
+        remote.log = log
+        remote.collect()
+    assert (tfb / "out" / log_name).read_text() == "engine log\n"
+    back = [c for c in copies if c[2]]
+    assert any(
+        src.endswith(remote_tfb + "/") and dest == str(tfb) + "/"
+        for src, dest, _ in back
+    )
+    assert any(src.endswith(cell.name) for src, _, _ in back)

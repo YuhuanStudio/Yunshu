@@ -296,6 +296,17 @@ def _catalogue_keys():
     return keys
 
 
+def tfb_outputs(job, pairs):
+    """(laptop path, remote path) of tfbench's TFB_OUT directory. The verify stage reads its engine
+    logs (out/server-*.log) from there, but no --out names it, so it must be copied back too."""
+    values = [
+        str(v)[len("TFB_OUT=") :] for v in job["cmd"] if str(v).startswith("TFB_OUT=")
+    ]
+    if job["env"].get("TFB_OUT"):
+        values.append(job["env"]["TFB_OUT"])
+    return [(v, mapped(v, pairs)) for v in dict.fromkeys(values)]
+
+
 def mapped(value, pairs):
     # Replace once: a remote checkout may itself be beneath the source checkout.
     pattern = re.compile(
@@ -421,6 +432,7 @@ class Remote:
 
             _, _, pairs, _ = paths(self.job, self.repo)
             outputs = [(str(p), mapped(p, pairs)) for p in output_paths(self.job)]
+            outputs += tfb_outputs(self.job, pairs)
         errors = []
         for local, remote in outputs:
             try:
@@ -477,6 +489,7 @@ class Remote:
         from gpuq_digest import output_paths
 
         outputs = [(str(p), mapped(p, pairs)) for p in output_paths(self.job)]
+        outputs += tfb_outputs(self.job, pairs)
         if any(
             a == b
             or not b.startswith(wt + "/")
