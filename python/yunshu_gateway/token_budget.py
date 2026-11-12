@@ -11,10 +11,13 @@ asked. A request that fits is untouched and reports nothing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+
+from yunshu_control.token_counter import TokenCountCache, count_message_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,26 @@ class TokenBudget:
                 info.budget = self.report()
             except Exception:
                 logger.debug("budget report not attached", exc_info=True)
+
+
+# Per-text exact counts shared by the gateway's prompt guards: an agent's history repeats
+# every earlier turn, so a new request re-encodes only what it adds.
+_PROMPT_COUNTS = TokenCountCache()
+
+
+def count_prompt_tokens(messages: list, tokenizer: Any, **kwargs: Any) -> int:
+    """Exact prompt tokens for the context guards (same count as ``count_message_tokens``)."""
+    return count_message_tokens(
+        messages, tokenizer, text_counter=_PROMPT_COUNTS.count, **kwargs
+    )
+
+
+async def count_prompt_tokens_async(
+    messages: list, tokenizer: Any, **kwargs: Any
+) -> int:
+    """``count_prompt_tokens`` on a worker thread: an encode of a long prompt must not stall
+    the event loop, which serves every other stream."""
+    return await asyncio.to_thread(count_prompt_tokens, messages, tokenizer, **kwargs)
 
 
 def estimate_tools_tokens(tools: Any) -> int:

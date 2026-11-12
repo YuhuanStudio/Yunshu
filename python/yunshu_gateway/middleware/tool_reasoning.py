@@ -8,39 +8,65 @@ An explicit reasoning field (even empty) always wins. No disk persistence.
 from __future__ import annotations
 
 import contextlib
-import copy
 import hashlib
 import json
 from collections import OrderedDict
 
+# A chat body can only carry tool history if one of these literal keys/values is present
+# (a JSON escape could spell them differently, so an escape forces the full parse).
+_TOOL_MARKERS = (b'"tools"', b'"tool_calls"', b'"tool_use"')
 
-def _canonical(messages):
-    out = []
-    for message in messages:
-        m = copy.deepcopy(message)
-        for key in ("reasoning", "reasoning_content", "tool_call_id", "id"):
-            m.pop(key, None)
-        if m.get("role") == "assistant":
-            m["content"] = m.get("content") or ""
-        for call in m.get("tool_calls") or []:
-            call.pop("id", None)
-            fn = call.get("function", {})
+
+def _may_carry_tools(raw: bytes) -> bool:
+    return b"\\u" in raw or any(marker in raw for marker in _TOOL_MARKERS)
+
+
+def _canonical_message(message):
+    """Canonical copy of one message; the caller's dict and nested lists are not mutated."""
+    m = {
+        k: v
+        for k, v in message.items()
+        if k not in ("reasoning", "reasoning_content", "tool_call_id", "id")
+    }
+    if m.get("role") == "assistant":
+        m["content"] = m.get("content") or ""
+    if m.get("tool_calls"):
+        calls = []
+        for call in m["tool_calls"]:
+            c = {k: v for k, v in call.items() if k != "id"}
+            fn = c.get("function", {})
             args = fn.get("arguments")
             if isinstance(args, str):
                 with contextlib.suppress(ValueError):
-                    fn["arguments"] = json.loads(args or "{}")
-        if isinstance(m.get("content"), list):
-            m["content"] = [
-                b
-                for b in m["content"]
-                if b.get("type") not in ("thinking", "redacted_thinking")
-            ]
-            for block in m["content"]:
-                if block.get("type") in ("tool_use", "tool_result"):
-                    block.pop("id", None)
-                    block.pop("tool_use_id", None)
-        out.append(m)
-    return out
+                    c["function"] = {**fn, "arguments": json.loads(args or "{}")}
+            calls.append(c)
+        m["tool_calls"] = calls
+    if isinstance(m.get("content"), list):
+        blocks = []
+        for b in m["content"]:
+            if b.get("type") in ("thinking", "redacted_thinking"):
+                continue
+            if b.get("type") in ("tool_use", "tool_result"):
+                b = {k: v for k, v in b.items() if k not in ("id", "tool_use_id")}
+            blocks.append(b)
+        m["content"] = blocks
+    return m
+
+
+def _identity_head(body, caller) -> bytes:
+    # The bytes json.dumps([caller, model, system, tools, [...]]) starts with; messages
+    # follow one by one, so each prefix's digest extends the previous one (no re-dump).
+    head = json.dumps(
+        [caller, body.get("model"), body.get("system"), body.get("tools"), []],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return head[:-3].encode() + b"["
+
+
+def _message_piece(message, first: bool) -> bytes:
+    text = json.dumps(_canonical_message(message), sort_keys=True, ensure_ascii=False)
+    return (text if first else ", " + text).encode()
 
 
 class ToolReasoningCache:
@@ -51,16 +77,11 @@ class ToolReasoningCache:
 
     @staticmethod
     def key(body, messages, caller):
-        identity = [
-            caller,
-            body.get("model"),
-            body.get("system"),
-            body.get("tools"),
-            _canonical(messages),
-        ]
-        return hashlib.sha256(
-            json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()
+        digest = hashlib.sha256(_identity_head(body, caller))
+        for i, message in enumerate(messages):
+            digest.update(_message_piece(message, i == 0))
+        digest.update(b"]]")
+        return digest.hexdigest()
 
     def remember(self, body, message, reasoning, caller):
         if not reasoning or not isinstance(reasoning, str):
@@ -80,8 +101,12 @@ class ToolReasoningCache:
             self.size -= len(old.encode())
 
     def restore(self, body, caller):
-        body = copy.deepcopy(body)
-        for i, message in enumerate(body.get("messages", [])):
+        """The body with cached reasoning added; the same object when nothing was added."""
+        messages = body.get("messages", [])
+        digest = hashlib.sha256(_identity_head(body, caller))
+        out = None
+        for i, message in enumerate(messages):
+            digest.update(_message_piece(message, i == 0))
             if message.get("role") != "assistant":
                 continue
             content = message.get("content")
@@ -102,15 +127,24 @@ class ToolReasoningCache:
             )
             if not has_tools or explicit:
                 continue
-            key = self.key(body, body["messages"][: i + 1], caller)
+            prefix = digest.copy()
+            prefix.update(b"]]")
+            key = prefix.hexdigest()
             reasoning = self.data.get(key)
             if reasoning:
                 self.data.move_to_end(key)
+                if out is None:
+                    out = {**body, "messages": list(messages)}
+                new = dict(message)
                 if anthropic:
-                    content.insert(0, {"type": "thinking", "thinking": reasoning})
+                    new["content"] = [
+                        {"type": "thinking", "thinking": reasoning},
+                        *content,
+                    ]
                 else:
-                    message["reasoning_content"] = reasoning
-        return body
+                    new["reasoning_content"] = reasoning
+                out["messages"][i] = new
+        return body if out is None else out
 
 
 class ToolReasoningMiddleware:
@@ -135,6 +169,8 @@ class ToolReasoningMiddleware:
                 break
         raw = b"".join(chunks)
         try:
+            if not _may_carry_tools(raw):
+                raise ValueError("tool-free request")
             original = json.loads(raw)
             if not isinstance(original, dict) or not isinstance(
                 original.get("messages"), list
@@ -163,7 +199,8 @@ class ToolReasoningMiddleware:
                 + headers.get(b"x-api-key", b"")
             ).hexdigest()
             body = self.cache.restore(original, caller)
-            raw = json.dumps(body).encode()
+            if body is not original:
+                raw = json.dumps(body).encode()
             # Request size accounting must see the rewritten size.
             scope = dict(
                 scope,

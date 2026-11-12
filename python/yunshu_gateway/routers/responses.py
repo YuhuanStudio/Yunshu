@@ -1903,16 +1903,18 @@ async def create_response(req: ResponsesRequest, request: Request):
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before generation (see chat.py).
     try:
-        from yunshu_control.token_counter import count_message_tokens
-
         from ..streaming import validate_context_window, validate_prefill_memory
 
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
         # tool definitions (rendered natively or injected below) are not in `messages` yet
-        from ..token_budget import estimate_tools_tokens
+        from ..token_budget import (
+            count_prompt_tokens,
+            count_prompt_tokens_async,
+            estimate_tools_tokens,
+        )
 
         _tools_est = estimate_tools_tokens(req.tools)
-        _est = count_message_tokens(messages, _tok) + _tools_est
+        _est = await count_prompt_tokens_async(messages, _tok) + _tools_est
         if req.truncation == "auto":
             from ..streaming import get_max_context_window
 
@@ -1920,11 +1922,12 @@ async def create_response(req: ResponsesRequest, request: Request):
             if _ctx and _est > _ctx:
                 _room = _ctx - min(req.max_output_tokens, _ctx // 4)
                 _before, _est_before = messages, _est
-                messages, _est = _auto_truncate(
+                messages, _est = await asyncio.to_thread(
+                    _auto_truncate,
                     messages,
                     _est,
                     _room,
-                    lambda ms: count_message_tokens(ms, _tok) + _tools_est,
+                    lambda ms: count_prompt_tokens(ms, _tok) + _tools_est,
                 )
                 if len(messages) < len(_before):
                     # never silent: what was dropped goes to x_yunshu.context_policy

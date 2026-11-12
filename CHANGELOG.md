@@ -44,7 +44,7 @@ patch release collects them.
 ### Changed
 
 - Seeded sampling uses the keyed sampler (`keyed_sampling.py`, noise hashed from seed, position and token id), so a seeded run does not reproduce `mlx_lm` `make_sampler` streams.
-
+- Prompt-length checks on `/v1/chat/completions`, `/v1/messages` and `/v1/responses` count tokens on a worker thread with a per-text memo, so a long prompt (or a multi-turn history) no longer stalls other streams on the event loop. Status codes and counts are unchanged.
 - Generic-layer models decode each concurrent row with its own call, so concurrent output equals solo output; the lockstep batched path is removed.
 - Release process: the release gate runs its stages fail-fast, its long stage checks 32K–128K identity and prefix-cache reuse, and GPU checks that passed are reused when only docs or tests change.
 - Removed `YUNSHU_GENERIC_LANE` (experimental, default off): its A/B lost on Gemma 4 E2B (decode -27..-33%, follow-up decode -35..-42%, cold TTFT +2..+16% at 1K/8K), so the generic-layer lane conversion and its NAX enable are deleted. Generic-layer models keep their stock projections.
@@ -65,6 +65,8 @@ patch release collects them.
 - Responses streaming during a long prefill sends a real `response.in_progress` event every 4 s (with the next `sequence_number`) instead of only a `: keep-alive` comment, so clients whose idle timer ignores comments keep waiting (OpenAI Responses streaming reference: `response.in_progress`).
 - Omni speech stream: a client disconnect now stops the Thinker/Talker generation before its next step; it used to run the whole turn on the GPU.
 - Silent-fallback gates (tree verify, DFlash 27B lane, MTP verify window, APC capacity) now count their misses in `/monitoring/kernel-fallbacks`, as the fused kernels already did.
+
+- Requests with logprobs hold far less memory while their stream is buffered for reconnect or replay: top-20 token logprobs took about 5.5 KB per token and now take about 0.94 KB, and `prompt_logprobs` about 5.1 KB and now about 0.6 KB per prompt position. Replayed output is unchanged.
 
 ### Security
 

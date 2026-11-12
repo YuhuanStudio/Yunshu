@@ -165,6 +165,9 @@ class KeyStore:
         self._next_check = 0.0
         self._dirty = False
         self._last_flush = time.monotonic()
+        # usage writes run off the event loop: one at a time, in snapshot order
+        self._write_lock = threading.Lock()
+        self._flush_thread: threading.Thread | None = None
         self._load()
         self._load_usage()
 
@@ -234,29 +237,40 @@ class KeyStore:
         self._mtime = self._stat()
 
     def flush(self, force: bool = False) -> None:
-        with self._lock:
-            if not (self._dirty or force):
-                return
-            payload = {
-                "version": 1,
-                "keys": {
-                    kid: {
-                        "last_used": st.last_used,
-                        "days": st.days,
-                        "buckets": st.buckets,
-                    }
-                    for kid, st in self._state.items()
-                    if kid in self._keys
-                },
-            }
-            self._dirty = False
-            self._last_flush = time.monotonic()
-        with contextlib.suppress(OSError):
-            self._write_private(self.usage_path, payload)
+        with (
+            self._write_lock
+        ):  # snapshot and write in one order, so an older one never wins
+            with self._lock:
+                if not (self._dirty or force):
+                    return
+                payload = {
+                    "version": 1,
+                    "keys": {
+                        kid: {
+                            "last_used": st.last_used,
+                            "days": st.days,
+                            "buckets": st.buckets,
+                        }
+                        for kid, st in self._state.items()
+                        if kid in self._keys
+                    },
+                }
+                self._dirty = False
+                self._last_flush = time.monotonic()
+            with contextlib.suppress(OSError):
+                self._write_private(self.usage_path, payload)
 
     def _maybe_flush(self) -> None:
-        if self._dirty and time.monotonic() - self._last_flush >= FLUSH_S:
-            self.flush()
+        """Called on the event loop: the due write runs on a background thread."""
+        if not self._dirty or time.monotonic() - self._last_flush < FLUSH_S:
+            return
+        with self._lock:
+            if self._flush_thread is not None and self._flush_thread.is_alive():
+                return
+            self._flush_thread = threading.Thread(
+                target=self.flush, name="api-key-usage-flush", daemon=True
+            )
+            self._flush_thread.start()
 
     def _refresh(self) -> None:
         """Pick up edits made by another process (at most one stat per second)."""

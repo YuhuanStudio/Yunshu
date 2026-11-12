@@ -14,8 +14,10 @@ Everything here runs on the event loop; the engine's executor threads only touch
 
 from __future__ import annotations
 
+import array
 import asyncio
 import contextlib
+import copy
 import hashlib
 import json
 import logging
@@ -131,6 +133,132 @@ class _LinkedEvent(threading.Event):
         super().__setattr__(name, value)
         if name == "run_stats" and self.mirror is not None:
             self.mirror.run_stats = value
+
+
+_LP_KEYS = frozenset(("token_id", "logprob", "top_logprobs"))
+_TOP_KEYS = frozenset(("token_id", "logprob"))
+_PROMPT_KEYS = frozenset(("token_id", "logprob"))
+
+
+class PackedLogprob:
+    """One token's logprob record as two typed arrays (ids as int64, values as double).
+
+    A dict record with 20 top entries held about 5.5 KB per token; this holds about 0.94 KB
+    (measured with probe_buffer_bytes.py, top-20 logprobs). Both
+    arrays store Python ints and floats exactly, so unpacking gives back the same record.
+    """
+
+    __slots__ = ("token_id", "logprob", "top_ids", "top_lps")
+
+    def __init__(self, token_id, logprob, top_ids, top_lps):
+        self.token_id = token_id
+        self.logprob = logprob
+        self.top_ids = top_ids
+        self.top_lps = top_lps
+
+
+def _is_plain_record(lp) -> bool:
+    """A token record ``{token_id, logprob[, top_logprobs]}`` with exact int/float types."""
+    if type(lp) is not dict or type(lp.get("token_id")) is not int:
+        return False
+    if type(lp.get("logprob")) is not float:
+        return False
+    keys = lp.keys()
+    if keys == _PROMPT_KEYS:
+        return True
+    if keys != _LP_KEYS or type(lp["top_logprobs"]) is not list:
+        return False
+    return all(
+        type(e) is dict
+        and e.keys() == _TOP_KEYS
+        and type(e["token_id"]) is int
+        and type(e["logprob"]) is float
+        for e in lp["top_logprobs"]
+    )
+
+
+def _pack_one(lp):
+    if not _is_plain_record(lp):
+        return lp  # anything else is kept as it was
+    if "top_logprobs" not in lp:
+        return PackedLogprob(lp["token_id"], lp["logprob"], None, None)
+    top = lp["top_logprobs"]
+    return PackedLogprob(
+        lp["token_id"],
+        lp["logprob"],
+        array.array("q", [e["token_id"] for e in top]),
+        array.array("d", [e["logprob"] for e in top]),
+    )
+
+
+def _unpack_one(p):
+    if type(p) is not PackedLogprob:
+        return p
+    if p.top_ids is None:
+        return {"token_id": p.token_id, "logprob": p.logprob}
+    return {
+        "token_id": p.token_id,
+        "logprob": p.logprob,
+        "top_logprobs": [
+            {"token_id": t, "logprob": v}
+            for t, v in zip(p.top_ids, p.top_lps, strict=True)
+        ],
+    }
+
+
+def _pack_list(values):
+    if type(values) is list:
+        return [_pack_one(x) for x in values]
+    return _pack_one(values)
+
+
+def _unpack_list(values):
+    if type(values) is list:
+        return [_unpack_one(x) for x in values]
+    return _unpack_one(values)
+
+
+def _has_packed(values) -> bool:
+    if type(values) is list:
+        return any(type(x) is PackedLogprob for x in values)
+    return type(values) is PackedLogprob
+
+
+def pack_output(out: Any) -> Any:
+    """A copy of ``out`` whose logprob and prompt-logprob records are packed (the buffer keeps
+    this copy)."""
+    changed = {}
+    lps = getattr(out, "logprobs", None)
+    if lps:
+        packed = _pack_list(lps)
+        if packed is not lps and _has_packed(packed):
+            changed["logprobs"] = packed
+    plps = getattr(out, "prompt_logprobs", None)
+    if plps:
+        packed = _pack_list(plps)
+        if _has_packed(packed):
+            changed["prompt_logprobs"] = packed
+    if not changed:
+        return out
+    clone = copy.copy(out)
+    for name, value in changed.items():
+        setattr(clone, name, value)
+    return clone
+
+
+def unpack_output(out: Any) -> Any:
+    """The output as the engine produced it: packed records become dicts again."""
+    changed = {}
+    for name in ("logprobs", "prompt_logprobs"):
+        values = getattr(out, name, None)
+        if values and _has_packed(values):
+            changed[name] = _unpack_list(values)
+    if not changed:
+        return out
+    clone = copy.copy(out)
+    for name, value in changed.items():
+        setattr(clone, name, value)
+    return clone
 
 
 class Generation:
@@ -299,7 +427,7 @@ async def _pump(gen: Generation, agen: AsyncIterator[Any]) -> None:
         async for out in agen:
             if not gen.attached and gen.real_cancel.is_set():
                 break
-            gen.buffer.append(out)
+            gen.buffer.append(pack_output(out))
             gen.notify()
             if not gen.gated and bool(getattr(out, "new_text", None)):
                 # The engine releases its first-delivery handoff (a heap collection that
@@ -433,7 +561,7 @@ async def run(
                 out = gen.buffer[index]
                 index += 1
                 _publish_stats(gen, caller_cancel, out, replay_n)
-                yield out
+                yield unpack_output(out)
                 gen.delivered = max(gen.delivered, index)
                 if caller_cancel.is_set():
                     return

@@ -1669,6 +1669,11 @@ async def _thinking_events(body, req: AnthropicMessagesRequest):
         pending += chunk.encode() if isinstance(chunk, str) else bytes(chunk)
         while b"\n\n" in pending:
             raw, pending = pending.split(b"\n\n", 1)
+            # No thinking block open and no thinking block can start in this frame: pass it
+            # through without parsing (same bytes the parse path would yield).
+            if not thinking and b'"thinking"' not in raw and b"\\u" not in raw:
+                yield raw + b"\n\n"
+                continue
             payload = [
                 ln[5:].strip() for ln in raw.splitlines() if ln.startswith(b"data:")
             ]
@@ -2147,14 +2152,13 @@ async def _create_message(
     # before we attempt generation (chat.py). Covers stream +
     # non-stream (before the stream branch below).
     try:
-        from yunshu_control.token_counter import count_message_tokens
-
         from ..streaming import validate_context_window, validate_prefill_memory
+        from ..token_budget import count_prompt_tokens_async
 
         _pf_tok = getattr(engine, "_tokenizer", None) or getattr(
             engine, "tokenizer", None
         )
-        _pf_est = count_message_tokens(messages, _pf_tok)
+        _pf_est = await count_prompt_tokens_async(messages, _pf_tok)
         if getattr(req, "_native_active", False):
             # native tool schemas are rendered by the template, outside `messages`
             from ..token_budget import estimate_tools_tokens

@@ -14,6 +14,7 @@ Supports:
 - Full OpenAI message format (text, image_url, content arrays)
 """
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -2046,10 +2047,7 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
     try:
         tokenizer = getattr(engine, "_tokenizer", None)
         if tokenizer is not None:
-            from yunshu_control.token_counter import (
-                IMAGE_TOKEN_ESTIMATE,
-                count_message_tokens,
-            )
+            from yunshu_control.token_counter import IMAGE_TOKEN_ESTIMATE
 
             from ..streaming import get_max_context_window, get_max_prefill_tokens
 
@@ -2123,7 +2121,11 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                 # here double-counted images — a multi-image prompt just under the
                 # window could be spuriously rejected. (The VLM sibling at ~1775
                 # already does this correctly.)
-                est_tokens = count_message_tokens(messages, tokenizer) + _tools_tok
+                from ..token_budget import count_prompt_tokens_async
+
+                est_tokens = (
+                    await count_prompt_tokens_async(messages, tokenizer) + _tools_tok
+                )
                 validate_context_window(est_tokens, req.model, engine)
                 # Reject huge under-window prompts that would OOM-crash the prefill
                 # (uncatchable process death) before we attempt them.
@@ -2614,7 +2616,9 @@ async def _handle_vlm_chat(
         if _vtok is not None:
             from yunshu_engine.media_tokens import make_media_token_counter
 
-            _vlm_est = count_message_tokens(
+            # off the loop: media dimensions are read from disk, and a long prompt is encoded
+            _vlm_est = await asyncio.to_thread(
+                count_message_tokens,
                 messages,
                 _vtok,
                 text_counter=(
