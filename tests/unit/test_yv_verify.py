@@ -1886,10 +1886,43 @@ def test_spec_mode_guard_rejects_mixed_or_missing_engagement(stage):
     assert stages.spec_mode_failures(base, [], {}, stage)
     assert not stages.spec_mode_failures(base, base, {}, stage)
     assert not stages.spec_mode_failures(
-        base, cand, {"allow_spec_mode_change": True}, stage
+        base, cand, {"spec_mode_change_ok": True}, stage
     )
     # Explicit opt-in does not waive missing evidence.
-    assert stages.spec_mode_failures(base, [], {"allow_spec_mode_change": True}, stage)
+    assert stages.spec_mode_failures(base, [], {"spec_mode_change_ok": True}, stage)
+
+
+def test_spec_mode_change_without_the_flag_fails_identity(world):
+    assert go(world, suite="identity", cand_env=["YUNSHU_VLM_DRAFT=mtp"]) == 1
+    v, _ = verdict_of(world)
+    assert any("engaged spec mode mismatch" in r for r in v["stages"][0]["reasons"])
+
+
+def test_spec_mode_change_passes_on_spec_on_vs_off(world):
+    rc = go(
+        world,
+        suite="identity",
+        cand_env=["YUNSHU_VLM_DRAFT=mtp"],
+        spec_mode_change_ok=True,
+        label="smc",
+    )
+    assert rc == 0
+    v, rd = verdict_of(world, label="smc")
+    n = v["stages"][0]["numbers"]
+    assert n["spec_mode"] == "spec mode: base=dflash cand=mtp (expected)"
+    assert "spec_on_vs_off" in n and "base_vs_cand" not in n
+    keys = {
+        r["cell"]
+        for r in core.read_jsonl(rd / "identity.jsonl")
+        if r.get("ev") == "cell_submitted"
+    }
+    assert "candoff.default" in keys and "cand.default" in keys
+
+
+def test_spec_mode_change_with_equal_modes_fails(world):
+    assert go(world, suite="identity", spec_mode_change_ok=True, label="eq") == 1
+    v, _ = verdict_of(world, label="eq")
+    assert any("--spec-mode-change-ok given" in r for r in v["stages"][0]["reasons"])
 
 
 def test_expected_spec_mode_is_enforced_even_when_both_arms_agree(monkeypatch):

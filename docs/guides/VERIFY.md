@@ -116,7 +116,7 @@ yv ab --base main --cand <dir> --suite kld --model <Flash-Next dir> --cand-env Y
 (identity up to 32K, apc, kld, speed), `scheduler` (same stages at 1K / 8K), `quick` (probe, smoke, identity, apc, kld, speed at 1K / 8K over prose / code / zh-CN / zh-TW), `memory`, `full` (everything, 1K / 8K / 32K),
 `long` (32K / 64K / 128K split cells of 2048-token replies via `tfbench --decode-tokens`: identity incl. spec on == off, apc, speed, memory at 32K / 128K, longqa, conc; every stage runs even after a failure), `long-speed` (speed only, with the same 2048-token decode, 256-token follow-up, contexts and tolerance as `long`; use `--reps 6` for confirmation), `longtrend` (one rep, 32K / 128K prose, for tag-to-tag comparisons), `tiny` (everything except kld and quality on a small model, for dry runs of the tool). `kld` reports n/a (no GPU job) for a family without capture hooks (only Qwen3.5 and Qwen4 / Flash-Next have them). `--suite smoke,identity,speed`
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
-`--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol`, `--spec-off`.
+`--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol`, `--spec-off`, `--spec-mode-change-ok`.
 
 `ssd` (preflight, `ssd_ttft`, `ssd_ttft_profile` at 32K / 128K): SSD prefix-cache restore TTFT. These two stages were in no suite before 2026-11-12. `tests/unit/test_yv_suite_coverage.py` fails when a stage is in no suite and not on its known-gap list.
 
@@ -381,3 +381,9 @@ killed if they exceed that hard limit. Omit the option for unmeasured workloads.
 as `arith_changed` instead of failing; spec on == off and solo == concurrent stay strict, and the run adds the `kld` and
 `kld_decode` stages, which must pass against the reference (a family without capture hooks fails instead of `n/a`).
 Without an MTP head or a DFlash drafter the default speculative request is `off`, not `mtp`.
+
+`--spec-mode-change-ok` (identity, speed): base and cand engage different speculative modes on purpose (for example an
+MTP drafter enabled for a family whose base runs spec off). The verdict records `spec mode: base=X cand=Y (expected)`.
+Identity then compares cand spec on == cand spec off strictly (the `candoff` arm is added automatically) and skips the
+base vs cand digests; speed still reports base vs cand deltas. The flag implies `--spec-off`. Fail-closed: equal engaged
+modes, an unknown or missing engaged mode in either arm, or a cand with no spec-on/spec-off pair all FAIL.

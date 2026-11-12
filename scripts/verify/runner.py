@@ -156,6 +156,10 @@ def apply_overrides(cfg: dict, a) -> dict:
         stages = [s for s in cfg["stages"] if s not in ("kld", "kld_decode")]
         at = stages.index("speed") if "speed" in stages else len(stages)
         cfg["stages"] = stages[:at] + ["kld", "kld_decode"] + stages[at:]
+    if getattr(a, "spec_mode_change_ok", False):
+        # base and cand engage different spec modes on purpose: identity compares cand on vs off instead
+        cfg["spec_mode_change_ok"] = True
+        cfg["spec_off"] = True
     if getattr(a, "device", ""):
         cfg["device"] = a.device
     if getattr(a, "followup_drift_ok", False):

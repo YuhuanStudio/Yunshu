@@ -170,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
         "kld_decode stages to pass against the reference; spec on/off and solo/concurrent stay strict",
     )
     ab.add_argument(
+        "--spec-mode-change-ok",
+        action="store_true",
+        help="base and cand engage different speculative modes on purpose (e.g. an MTP drafter enabled "
+        "for the family): identity compares cand spec on == off strictly and skips base vs cand digests; "
+        "the modes must differ (equal modes or an unknown mode fail); speed still reports base vs cand",
+    )
+    ab.add_argument(
         "--mem-gb",
         type=float,
         default=0,

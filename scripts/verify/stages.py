@@ -926,7 +926,10 @@ def _identity_cells(ctx: Ctx) -> list:
         menv = mode_env(mode)
         variants = [("base", "base", menv), ("cand", "cand", menv)]
         eff = ctx.arm_env("cand", menv).get("YUNSHU_VLM_DRAFT", "").lower()
-        if cfg["spec_off"] and eff not in ("off", "none"):
+        if (cfg["spec_off"] or cfg.get("spec_mode_change_ok")) and eff not in (
+            "off",
+            "none",
+        ):
             variants.append(("candoff", "cand", dict(menv, YUNSHU_VLM_DRAFT="off")))
         for tag, ctxs, kinds in _units(ctx):
             for name, tree_arm, extra in variants:
@@ -1064,21 +1067,44 @@ def expected_spec_mode(suite: dict, env: dict) -> str | None:
     return suite.get("expect_spec_mode") or os.environ.get("YV_EXPECT_SPEC") or None
 
 
-def spec_mode_failures(base, cand, cfg, cell, expect=None):
-    """A paired cell must prove both engines engaged the same speculative path, and the path the run expects
-    (``expect``: {"base": mode, "cand": mode}; a plain-mode fallback in both arms must not pass)."""
+def _engaged_modes(base, cand, cell):
+    """(modes, reasons): the engaged speculative mode of base and cand; a missing or ambiguous mode fails."""
     modes = []
     for arm, rows in (("base", base), ("cand", cand)):
         sessions = [r for r in rows if r.get("part") == "session"]
         values = {r.get("engaged_spec_mode") for r in sessions}
         if not sessions or len(values) != 1 or not all(values):
-            return [f"{cell}: missing or ambiguous {arm} engaged spec mode"]
+            return None, [f"{cell}: missing or ambiguous {arm} engaged spec mode"]
         modes.append(next(iter(values)))
+    return modes, []
+
+
+def spec_mode_note(base, cand):
+    """The verdict line for an expected spec mode change (None when the modes cannot be read)."""
+    modes, _ = _engaged_modes(base, cand, "")
+    if modes is None:
+        return None
+    return f"spec mode: base={modes[0]} cand={modes[1]} (expected)"
+
+
+def spec_mode_failures(base, cand, cfg, cell, expect=None):
+    """A paired cell must prove both engines engaged the same speculative path, and the path the run expects
+    (``expect``: {"base": mode, "cand": mode}; a plain-mode fallback in both arms must not pass). With
+    cfg ``spec_mode_change_ok`` (yv ab --spec-mode-change-ok) a difference is expected, and equal modes fail."""
+    modes, reasons = _engaged_modes(base, cand, cell)
+    if reasons:
+        return reasons
     want = expect or {}
     for arm, got in zip(("base", "cand"), modes, strict=True):
         if want.get(arm) and got != want[arm]:
             return [f"{cell}: {arm} engaged spec mode {got!r}, expected {want[arm]!r}"]
-    if modes[0] != modes[1] and not cfg.get("allow_spec_mode_change", False):
+    if cfg.get("spec_mode_change_ok"):
+        if modes[0] == modes[1]:
+            return [
+                f"{cell}: --spec-mode-change-ok given but base and cand both engaged {modes[0]!r}; no spec mode change to excuse"
+            ]
+        return []
+    if modes[0] != modes[1]:
         return [f"{cell}: engaged spec mode mismatch base={modes[0]} cand={modes[1]}"]
     return []
 
@@ -1088,6 +1114,7 @@ def stage_identity(ctx: Ctx) -> StageResult:
     res = ctx.exe.run_cells(_identity_cells(ctx))
     reasons = _failed_cells(res)
     numbers: dict = {}
+    mode_change = bool(ctx.suite.get("spec_mode_change_ok"))
     if not reasons:
         for mode in ctx.suite.get("spec_modes") or ["default"]:
             tag = "" if mode == "default" else f"[{mode}] "
@@ -1108,43 +1135,52 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 },
             )
             planned = analyze.planned_identity(ctx.suite["ctx"], ctx.suite["kinds"])
-            cmp_ = analyze.compare_identity(
-                base,
-                cand,
-                "base",
-                "cand",
-                planned=planned,
-                input_change_ok=bool(ctx.suite.get("input_change_ok")),
-                followup_drift_ok=bool(ctx.suite.get("followup_drift_ok")),
-                arith_change_ok=bool(ctx.suite.get("arith_change_ok")),
-            )
-            if cmp_.get("arith_changed"):
-                numbers[f"{tag}arith_changed".strip()] = {
-                    "cells": cmp_["arith_changed"],
-                    "note": "arith_change_ok: digests differ, excused only if kld and kld_decode pass",
-                }
-            if ctx.suite.get("followup_drift_ok"):
-                # printed in the verdict so the allowance is never silent
-                numbers[f"{tag}followup_allowance".strip()] = (
-                    "followup_drift_ok: turn2 digest differences with equal token counts are "
-                    f"excused (cells excused: {len(cmp_['followup_drift'])})"
+            if mode_change:
+                numbers[f"{tag}spec_mode".strip()] = spec_mode_note(base, cand)
+            else:
+                cmp_ = analyze.compare_identity(
+                    base,
+                    cand,
+                    "base",
+                    "cand",
+                    planned=planned,
+                    input_change_ok=bool(ctx.suite.get("input_change_ok")),
+                    followup_drift_ok=bool(ctx.suite.get("followup_drift_ok")),
+                    arith_change_ok=bool(ctx.suite.get("arith_change_ok")),
                 )
-            if cmp_.get("followup_drift"):
-                numbers[f"{tag}followup_drift".strip()] = cmp_["followup_drift"]
-            if cmp_["input_changed"]:
-                numbers[f"{tag}input_changed".strip()] = cmp_["input_changed"]
-            numbers[f"{tag}base_vs_cand".strip()] = {
-                "compared": cmp_["compared"],
-                "mismatches": len(cmp_["mismatches"]),
-            }
-            numbers[f"{tag}cross_version_drift".strip()] = {
-                "cells": len(cmp_["drift"]),
-                "max_abs_dlp": max([d["max_abs_dlp"] for d in cmp_["drift"]] or [0.0]),
-                "note": "tokens equal, logprobs differ (information; see the accuracy-gate decision)",
-            }
-            if not cmp_["ok"]:
-                reasons.append(f"{tag}base != cand: {cmp_['mismatches'][:3]}")
+                if cmp_.get("arith_changed"):
+                    numbers[f"{tag}arith_changed".strip()] = {
+                        "cells": cmp_["arith_changed"],
+                        "note": "arith_change_ok: digests differ, excused only if kld and kld_decode pass",
+                    }
+                if ctx.suite.get("followup_drift_ok"):
+                    # printed in the verdict so the allowance is never silent
+                    numbers[f"{tag}followup_allowance".strip()] = (
+                        "followup_drift_ok: turn2 digest differences with equal token counts are "
+                        f"excused (cells excused: {len(cmp_['followup_drift'])})"
+                    )
+                if cmp_.get("followup_drift"):
+                    numbers[f"{tag}followup_drift".strip()] = cmp_["followup_drift"]
+                if cmp_["input_changed"]:
+                    numbers[f"{tag}input_changed".strip()] = cmp_["input_changed"]
+                numbers[f"{tag}base_vs_cand".strip()] = {
+                    "compared": cmp_["compared"],
+                    "mismatches": len(cmp_["mismatches"]),
+                }
+                numbers[f"{tag}cross_version_drift".strip()] = {
+                    "cells": len(cmp_["drift"]),
+                    "max_abs_dlp": max(
+                        [d["max_abs_dlp"] for d in cmp_["drift"]] or [0.0]
+                    ),
+                    "note": "tokens equal, logprobs differ (information; see the accuracy-gate decision)",
+                }
+                if not cmp_["ok"]:
+                    reasons.append(f"{tag}base != cand: {cmp_['mismatches'][:3]}")
             offrows = _rows_for(res, "candoff", mode)
+            if mode_change and not offrows:
+                reasons.append(
+                    f"{tag}spec mode change needs a cand spec-on arm and a cand spec-off arm (none)"
+                )
             if offrows:
                 if analyze.session_info(offrows).get("engaged_spec_mode") != "off":
                     reasons.append(
@@ -1563,6 +1599,8 @@ def stage_speed(ctx: Ctx) -> StageResult:
         reasons += [f"missing {m}" for m in sp["missing"]]
         if not sp["cells"]:
             reasons.append("no comparable speed cells")
+        if cfg.get("spec_mode_change_ok") and base and cand:
+            numbers["spec_mode"] = spec_mode_note(base[0], cand[0])
     return _finish(ctx, StageResult("speed", not reasons, reasons, numbers))
 
 
