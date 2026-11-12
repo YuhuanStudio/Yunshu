@@ -19,6 +19,7 @@ pytest.importorskip("mlx_vlm")
 
 from yunshu_engine.round_driver import driver as drv  # noqa: E402
 from yunshu_engine.round_driver import generic  # noqa: E402
+from yunshu_engine.round_driver.layer import PackedLayer  # noqa: E402
 
 VOCAB, DIM, HEADS, DEPTH = 64, 32, 2, 2
 LOG: list[dict] = []
@@ -1081,7 +1082,7 @@ def test_generic_jump_forward_caches_do_not_enter_default_namespace(monkeypatch)
 
     lm = TinyLM()
     d = make(lm)
-    packed = SimpleNamespace(generic=False, dflash=None)
+    packed = SimpleNamespace(layer=PackedLayer(lm), dflash=None)
     original = settings.get
     salts = []
     for enabled in (False, True, False):
@@ -1104,7 +1105,9 @@ def test_generic_resume_cache_namespace_excludes_old_packed_namespace():
     lm = TinyLM()
     d = make(lm)
     generic_salt = d.apc_salt(19, False)
-    d.generic = False  # the previous shared namespace, with identical arithmetic ids
+    d.layer = PackedLayer(
+        lm
+    )  # the previous shared namespace, with identical arithmetic ids
     assert d.apc_salt(19, False) != generic_salt
 
 

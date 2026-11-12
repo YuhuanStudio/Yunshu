@@ -1,6 +1,7 @@
 from types import SimpleNamespace as NS
 
 from yunshu_engine.round_driver.driver import RoundDriver
+from yunshu_engine.round_driver.layer import GenericLayer, PackedLayer
 
 
 def _driver(**kw):
@@ -13,7 +14,13 @@ def _driver(**kw):
         ahead_logged=False,
         req=NS(guide=None, processors=[], budget=None, sampling=None, logprobs=False),
     )
-    d = NS(dflash=None, head=None, generic=True, rows=[row], batch=NS(rows=[row]))
+    d = NS(
+        dflash=None,
+        head=None,
+        layer=NS(caps=GenericLayer.caps),
+        rows=[row],
+        batch=NS(rows=[row]),
+    )
     for k, v in kw.items():
         setattr(row.req if k in vars(row.req) else d, k, v)
     return d, row
@@ -27,7 +34,7 @@ def test_plain_greedy_generic_row_pipelines():
 def test_blockers_named():
     d, _ = _driver(sampling=object(), processors=[1])
     assert RoundDriver._lone_blockers(d) == ["processors", "sampling"]
-    d, _ = _driver(generic=False)
+    d, _ = _driver(layer=NS(caps=PackedLayer.caps))
     assert RoundDriver._lone_blockers(d) == ["layer"]
 
 
@@ -100,7 +107,7 @@ def _lone(mp, trimmable, max_tokens=100, stop=()):
     d = NS(
         dflash=None,
         head=None,
-        generic=True,
+        layer=NS(caps=GenericLayer.caps),
         rows=[row],
         batch=Batch([row], trimmable),
         stop_tokens=set(stop),

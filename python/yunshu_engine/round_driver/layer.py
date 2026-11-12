@@ -39,6 +39,7 @@ class LayerCaps:
     slot_decode: bool
     identity_logits: bool
     per_token_rows: bool
+    fn_trace: bool  # Flash-Next span / decode-step telemetry (fn_span log lines)
 
 
 @dataclass
@@ -103,6 +104,14 @@ class ModelLayer(Protocol):
         """End of the prompt segment that starts at ``start`` (the layer's own plan)."""
         ...
 
+    def begin_step(self, model: Any, drafted: bool) -> None:
+        """Per-step reset before a step runs (packed + DFlash drafter: the mRoPE state)."""
+        ...
+
+    def apc_suffix(self) -> str:
+        """Extra APC arithmetic key of this layer (generic: the resume-rope and jump-forward namespaces)."""
+        ...
+
     def prefill(
         self,
         row: Any,
@@ -131,6 +140,7 @@ class PackedLayer:
         slot_decode=True,
         identity_logits=False,
         per_token_rows=True,
+        fn_trace=False,
     )
 
     @classmethod
@@ -180,6 +190,15 @@ class PackedLayer:
 
     def admit(self, row: Any, req: Any) -> None:
         return None  # no per-row layer state (driver.py add)
+
+    def begin_step(self, model: Any, drafted: bool) -> None:
+        if drafted:
+            from ..mrope import clear_rope_state
+
+            clear_rope_state(model)
+
+    def apc_suffix(self) -> str:
+        return ""
 
     def cut(self, row: Any, start: int, atom: Callable[[int], int]) -> int:
         """End of the one prompt atom that starts at ``start``: the next multiple of the atom size, cut at the
@@ -269,6 +288,7 @@ class FlashNextLayer:
         slot_decode=False,
         identity_logits=False,
         per_token_rows=True,
+        fn_trace=True,
     )
 
     @classmethod
@@ -328,6 +348,12 @@ class FlashNextLayer:
     ) -> int:
         return _grid_cut(row, start, atom)  # one span per grid cell, no run merge
 
+    def begin_step(self, model: Any, drafted: bool) -> None:
+        return None  # Flash-Next keeps no mRoPE state across steps
+
+    def apc_suffix(self) -> str:
+        return ""
+
     def prefill(
         self,
         row: Any,
@@ -356,6 +382,7 @@ class GenericLayer:
         slot_decode=False,
         identity_logits=True,
         per_token_rows=False,
+        fn_trace=False,
     )
 
     @classmethod
@@ -426,6 +453,19 @@ class GenericLayer:
     ) -> mx.array | None:
         # the model's own call: logits only for the span that ends the prompt
         return generic.prefill(self.lm, row, start, end)
+
+    def begin_step(self, model: Any, drafted: bool) -> None:
+        return None  # no DFlash drafter on this layer
+
+    def apc_suffix(self) -> str:
+        # Older generic reply checkpoints may contain suffix K rotated from zero after APC restore; never
+        # reuse them after the fix. Upstream T>1 decode rounds differently: jump-forward gets its own key.
+        from .. import settings
+
+        suffix = ":resume-rope-v2"
+        if settings.get("YUNSHU_JUMP_FORWARD"):
+            suffix += ":jump-forward"
+        return suffix
 
 
 class LayerRegistry:

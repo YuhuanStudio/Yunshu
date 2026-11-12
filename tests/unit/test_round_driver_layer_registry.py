@@ -170,3 +170,21 @@ def test_prefill_dispatches_to_each_family_forward(
     assert FlashNextLayer(flash_lm).prefill(row, seg, 0, 4) == "h"
     assert GenericLayer(generic_lm).prefill(row, seg, 0, 4) is None
     assert calls == ["lane", "flash", "generic"]
+
+
+def test_c6_caps_and_hooks_match_the_census(
+    generic_lm, packed_lm, flash_lm, monkeypatch
+):
+    """C6: replay / lone pipelining / lazy head / fn_trace caps, and the APC suffix and step hooks per layer."""
+    monkeypatch.delenv("YUNSHU_JUMP_FORWARD", raising=False)
+    assert PackedLayer.caps.replay and FlashNextLayer.caps.replay
+    assert not GenericLayer.caps.replay
+    assert GenericLayer.caps.lone_pipelining and not PackedLayer.caps.lone_pipelining
+    assert not PackedLayer.caps.lazy_head and FlashNextLayer.caps.lazy_head
+    assert FlashNextLayer.caps.fn_trace and not PackedLayer.caps.fn_trace
+    assert not GenericLayer.caps.fn_trace
+    assert PackedLayer(packed_lm).apc_suffix() == ""
+    assert FlashNextLayer(flash_lm).apc_suffix() == ""
+    assert GenericLayer(generic_lm).apc_suffix() == ":resume-rope-v2"
+    monkeypatch.setenv("YUNSHU_JUMP_FORWARD", "1")
+    assert GenericLayer(generic_lm).apc_suffix() == ":resume-rope-v2:jump-forward"

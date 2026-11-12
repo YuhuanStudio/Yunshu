@@ -758,16 +758,7 @@ class RoundDriver:
         arith = gdn_prefill.kernel_id() + (
             nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
         )
-        if self.generic:
-            # Older generic reply checkpoints may contain suffix K rotated
-            # from zero after APC restore; never reuse them after the fix.
-            arith += ":resume-rope-v2"
-            from .. import settings
-
-            if settings.get("YUNSHU_JUMP_FORWARD"):
-                # Upstream T>1 decode rounds differently. Reply checkpoints from
-                # this user option must not enter the default T=1 namespace.
-                arith += ":jump-forward"
+        arith += self.layer.apc_suffix()
         if ngram:
             # T>1 windows round differently from T=1 on stock kernels: their replies stay out of the plain namespace
             arith += ":ngram"
@@ -1280,10 +1271,7 @@ class RoundDriver:
         self._finish_join()
         if not self.rows:
             return []
-        if self.dflash is not None and not self.flash:
-            from ..mrope import clear_rope_state
-
-            clear_rope_state(self.model)
+        self.layer.begin_step(self.model, self.dflash is not None)
         if self._will_decode():
             self._prefilled_last = False
             t0 = time.perf_counter()
@@ -1292,7 +1280,7 @@ class RoundDriver:
             out = self._decode_step()
             self._t_end = time.perf_counter()
             self.step_s += self._t_end - t0
-            if self.flash and self.decode_steps < 3:
+            if self.layer.caps.fn_trace and self.decode_steps < 3:
                 logger.info(
                     "round driver: decode step %d of the burst took %.1f ms",
                     self.decode_steps + 1,
@@ -1432,7 +1420,7 @@ class RoundDriver:
         # prefix and its tail is re-absorbed below from the stored hidden rows (a
         # one-layer forward, as on a real step), so only the target forward is skipped.
         if (
-            self.generic
+            not self.layer.caps.replay
             or row.req.prompt_logprobs is not None
             or row.finished
             or not replay.eligible(it.start, it.end, len(ids))
@@ -1449,7 +1437,7 @@ class RoundDriver:
     def _head_lazy(self, row: _Row, advanced: dict, hidden, items: list) -> bool:
         """Keep ``row``'s head prefill queued past this step's first token (Flash-Next rows,
         bounded by HEAD_LAZY_MAX of retained prompt HC states); False evaluates it now."""
-        if not self.flash or hidden is None or id(row) not in advanced:
+        if not self.layer.caps.lazy_head or hidden is None or id(row) not in advanced:
             return False
         row.head_lazy += sum(
             it.count * int(hidden.shape[-1]) * hidden.dtype.size
@@ -1696,7 +1684,7 @@ class RoundDriver:
             *[a for r in advanced.values() for a in cache_buffers(cast(list, r.cache))],
         )
         tm.mark("wait")
-        if self.flash and len(span_t) == len(items) + 2:
+        if self.layer.caps.fn_trace and len(span_t) == len(items) + 2:
             self._log_spans(items, span_t, time.perf_counter() - t_eval)
         if entry is None:
             self._record_tail(items, hidden, captures)
@@ -1780,7 +1768,11 @@ class RoundDriver:
                 r.tm = fn_ttft.Timer()
                 r.tm.t0 = tm.t0
             r.tm.merge(tm)
-            if r.done == len(r.req.ids) and r.hit < len(r.req.ids) and self.flash:
+            if (
+                r.done == len(r.req.ids)
+                and r.hit < len(r.req.ids)
+                and self.layer.caps.fn_trace
+            ):
                 r.tm.log("driver", len(r.req.ids), r.hit)
                 r.tm = None
         self.steps += 1
@@ -1797,7 +1789,7 @@ class RoundDriver:
         checks = {
             "dflash": self.dflash is not None,
             "head": self.head is not None,
-            "layer": not self.generic,
+            "layer": not self.layer.caps.lone_pipelining,
             "batch": len(self.batch.rows) != 1,
             "ngram": r.ngram is not None,
             "force": bool(r.force),
