@@ -146,3 +146,27 @@ def test_drafters_contract_per_layer(generic_lm, packed_lm):
         GenericLayer(generic_lm).drafters(generic_lm, **{**plain, "drafter": object()})
     packed = PackedLayer(packed_lm).drafters(packed_lm, **plain)
     assert packed.head is None and packed.dflash is None and packed.max_draft == 7
+
+
+def test_prefill_dispatches_to_each_family_forward(
+    generic_lm, packed_lm, flash_lm, monkeypatch
+):
+    """C5: each adapter's ``prefill`` calls its family's own forward (the driver's old branches)."""
+    from yunshu_engine.round_driver import generic
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        forward, "lane_forward", lambda lm, seg, **kw: calls.append("lane") or "h"
+    )
+    monkeypatch.setattr(
+        flashnext, "prefill", lambda lm, seg, **kw: calls.append("flash") or "h"
+    )
+    monkeypatch.setattr(
+        generic, "prefill", lambda lm, row, s, e: calls.append("generic") or None
+    )
+    seg = SimpleNamespace()
+    row = SimpleNamespace()
+    assert PackedLayer(packed_lm).prefill(row, seg, 0, 4) == "h"
+    assert FlashNextLayer(flash_lm).prefill(row, seg, 0, 4) == "h"
+    assert GenericLayer(generic_lm).prefill(row, seg, 0, 4) is None
+    assert calls == ["lane", "flash", "generic"]

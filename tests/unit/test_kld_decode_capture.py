@@ -150,15 +150,16 @@ def test_driver_decode_is_teacher_forced(tiny, capture, arm):
     from yunshu_engine.round_driver.driver import RoundDriver
 
     spy = []
-    inner = rd.lane_forward
-    rd.lane_forward = lambda lm, seg, **kw: spy.append(inner(lm, seg, **kw)) or spy[-1]
+
+    inner = fwd.lane_forward
+    fwd.lane_forward = lambda lm, seg, **kw: spy.append(inner(lm, seg, **kw)) or spy[-1]
     try:
         d2 = RoundDriver(tiny, stop_tokens=set(), chunk=4096)
         d2.add(rd.Request(prefix + forced[:-1], 1, handle=1))
         while d2.busy():
             d2.step()
     finally:
-        rd.lane_forward = inner
+        fwd.lane_forward = inner
     h = mx.concatenate(spy, axis=0)
     lg = fwd.logits(tiny, h).astype(mx.float32)
     lp = lg - mx.logsumexp(lg, axis=-1, keepdims=True)

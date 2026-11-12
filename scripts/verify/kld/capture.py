@@ -487,8 +487,8 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
 
         return run
 
-    rd.lane_forward = hooked(
-        rd.lane_forward, lambda lm: lambda h: fwd.logits(lm, h[0])[None]
+    fwd.lane_forward = hooked(
+        fwd.lane_forward, lambda lm: lambda h: fwd.logits(lm, h[0])[None]
     )
     # Flash-Next (Qwen4 family) prefills through flashnext.prefill, not lane_forward: without this hook
     # no window is ever recorded ("the capture hook wrote no window").

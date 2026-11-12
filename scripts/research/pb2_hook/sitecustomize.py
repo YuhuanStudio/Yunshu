@@ -160,7 +160,11 @@ def patch_driver(mod):
 
     cls._new_coordinator = new_coordinator
     wrap_fn(mod, "reserve_prompt_kv", "reserve_kv")
-    wrap_fn(mod, "lane_forward", "lane_forward")
+    wrap_fn(
+        importlib.import_module(mod.__package__ + ".forward"),
+        "lane_forward",
+        "lane_forward",
+    )
     wrap_fn(mod.replay, "restore", "replay_restore")
 
 

@@ -280,13 +280,15 @@ def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypat
 
     lm, _ = tiny
     steps: list[list[int]] = []
-    real_forward = drv.lane_forward
+    from yunshu_engine.round_driver import forward as fwd
+
+    real_forward = fwd.lane_forward
 
     def spy(model, seg, **kw):
         steps.append([seg.length])
         return real_forward(model, seg, **kw)
 
-    monkeypatch.setattr(drv, "lane_forward", spy)
+    monkeypatch.setattr(fwd, "lane_forward", spy)
 
     def prefill_spans(chunk):
         d = drv.RoundDriver(lm, stop_tokens=set(), chunk=chunk)
@@ -315,13 +317,15 @@ def test_each_prefill_segment_runs_the_lane_forward(tiny, monkeypatch):
 
     lm, _ = tiny
     lengths: list[int] = []
-    real = drv.lane_forward
+    from yunshu_engine.round_driver import forward as fwd
+
+    real = fwd.lane_forward
 
     def spy(model, seg, **kw):
         lengths.append(seg.length)
         return real(model, seg, **kw)
 
-    monkeypatch.setattr(drv, "lane_forward", spy)
+    monkeypatch.setattr(fwd, "lane_forward", spy)
     d = drv.RoundDriver(lm, stop_tokens=set(), chunk=32)
     d.add(drv.Request([(7 * i + 1) % 500 for i in range(40)], 1, handle=0))
     d.step()
@@ -950,13 +954,15 @@ def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
 
     lm, _ = tiny
     lengths: list[int] = []
-    real = drv.lane_forward
+    from yunshu_engine.round_driver import forward as fwd
+
+    real = fwd.lane_forward
 
     def spy(model, seg, **kw):
         lengths.append(seg.length)
         return real(model, seg, **kw)
 
-    monkeypatch.setattr(drv, "lane_forward", spy)
+    monkeypatch.setattr(fwd, "lane_forward", spy)
     drv2 = drv.RoundDriver(lm, stop_tokens=set(), chunk=512)
     drv2.add(
         drv.Request([(7 * i + 1) % 500 for i in range(99)], 2, handle=0, use_apc=False)

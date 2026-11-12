@@ -31,8 +31,10 @@ def hooks(monkeypatch, tmp_path):
     from yunshu_engine.round_driver import flashnext as fn
 
     monkeypatch.setenv("KLD_CACHE_DIR", str(tmp_path))
+    from yunshu_engine.round_driver import forward as fwd
+
     for obj, name in (
-        (rd, "lane_forward"),
+        (fwd, "lane_forward"),
         (fn, "prefill"),  # install_driver wraps it too: never leave a wrapper behind
         (rd.RoundDriver, "_prefill_step"),
         (PromptProcessingBatch, "generate"),
@@ -55,20 +57,20 @@ def _prefill(lm, ids, chunk=256):
 
 
 def test_capture_follows_driver_prefill(tiny, hooks):
-    from yunshu_engine.round_driver import driver as rd
     from yunshu_engine.round_driver import forward as fwd
 
     capture, out = hooks
     ids = [(7 * i + 11) % 500 for i in range(700)]  # several prefill segments
     hidden = []
-    inner = rd.lane_forward
+
+    inner = fwd.lane_forward
 
     def spy(lm, seg, **kw):
         h = inner(lm, seg, **kw)
         hidden.append(h)
         return h
 
-    rd.lane_forward = spy
+    fwd.lane_forward = spy
     capture.install("cand", "qwen3_5")
     (out / "_current.json").write_text(json.dumps(dict(wid="w0")))
     _prefill(tiny, ids)
@@ -89,11 +91,12 @@ def test_capture_follows_driver_prefill(tiny, hooks):
 
 def test_restored_prefix_writes_nothing(tiny, hooks, monkeypatch):
     """A prefill that does not start at position 0 fails closed (no partial window)."""
-    from yunshu_engine.round_driver import driver as rd
 
     capture, out = hooks
     capture.install("cand", "qwen3_5")
-    inner = rd.lane_forward
+    from yunshu_engine.round_driver import forward as fwd
+
+    inner = fwd.lane_forward
     seen = []
 
     def shifted(lm, seg, **kw):
@@ -126,9 +129,10 @@ def test_flash_next_prefill_is_hooked(monkeypatch, tmp_path):
 
     from yunshu_engine.round_driver import driver as rd
     from yunshu_engine.round_driver import flashnext as fn
+    from yunshu_engine.round_driver import forward as fwd
 
     for obj, name in (
-        (rd, "lane_forward"),
+        (fwd, "lane_forward"),
         (rd.RoundDriver, "_prefill_step"),
         (fn, "prefill"),
     ):

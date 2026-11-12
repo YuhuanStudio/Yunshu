@@ -103,6 +103,20 @@ class ModelLayer(Protocol):
         """End of the prompt segment that starts at ``start`` (the layer's own plan)."""
         ...
 
+    def prefill(
+        self,
+        row: Any,
+        seg: Any,
+        start: int,
+        end: int,
+        *,
+        capture_ids: Any = (),
+        captured: list | None = None,
+    ) -> mx.array | None:
+        """One prompt span of ``row`` on its caches: hidden rows (one per token) or, generic, the logits of
+        the prompt-ending span (None otherwise)."""
+        ...
+
 
 class PackedLayer:
     """Qwen3.5 family (dense and MoE): ``forward.py`` packed rows, ``DecodeBatch`` slot buffers."""
@@ -214,6 +228,20 @@ class PackedLayer:
             end = nxt
         return end
 
+    def prefill(
+        self,
+        row: Any,
+        seg: Any,
+        start: int,
+        end: int,
+        *,
+        capture_ids: Any = (),
+        captured: list | None = None,
+    ) -> mx.array | None:
+        return forward.lane_forward(
+            self.lm, seg, capture_ids=capture_ids, captured=captured
+        )
+
 
 def _grid_cut(row: Any, start: int, atom: Callable[[int], int]) -> int:
     """Flash-Next and generic prompt span: the absolute grid plus the row's checkpoints and nothing else.
@@ -300,6 +328,20 @@ class FlashNextLayer:
     ) -> int:
         return _grid_cut(row, start, atom)  # one span per grid cell, no run merge
 
+    def prefill(
+        self,
+        row: Any,
+        seg: Any,
+        start: int,
+        end: int,
+        *,
+        capture_ids: Any = (),
+        captured: list | None = None,
+    ) -> mx.array | None:
+        return flashnext.prefill(
+            self.lm, seg, capture_ids=capture_ids, captured=captured
+        )
+
 
 class GenericLayer:
     """Every other mlx-vlm family: the model's own upstream forward per row, no drafter (``generic.py``)."""
@@ -371,6 +413,19 @@ class GenericLayer:
         if scoring:
             end = min(end, start + SCORING_SPAN)
         return end
+
+    def prefill(
+        self,
+        row: Any,
+        seg: Any,
+        start: int,
+        end: int,
+        *,
+        capture_ids: Any = (),
+        captured: list | None = None,
+    ) -> mx.array | None:
+        # the model's own call: logits only for the span that ends the prompt
+        return generic.prefill(self.lm, row, start, end)
 
 
 class LayerRegistry:

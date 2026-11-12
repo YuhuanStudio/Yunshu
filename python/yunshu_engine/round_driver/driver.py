@@ -61,10 +61,10 @@ from ..serving.work_scheduler import (
     decode_quantum,
 )
 from ..text_logprobs import top_logprobs_device
-from . import flashnext, generic, replay
+from . import flashnext, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
-from .forward import Segment, lane_forward
+from .forward import Segment
 from .layer import FlashNextLayer, GenericLayer, PackedLayer
 
 logger = logging.getLogger(__name__)
@@ -1629,33 +1629,20 @@ class RoundDriver:
                         if pf is not None:
                             pf.begin(len(it.row.req.ids), it.start, it.end)
                         got: list[mx.array] = []
-                        if self.generic:
-                            # the model's own call: logits only for the span that ends the prompt
-                            out = generic.prefill(self.lm, it.row, it.start, it.end)
-                            if out is not None:
-                                parts.append(out)
-                            per_seg.append(got)
-                            continue
-                        parts.append(
-                            flashnext.prefill(
-                                self.lm,
-                                it.seg,
-                                capture_ids=self.dflash.capture_ids
-                                if self.dflash
-                                else (),
-                                captured=got if self.dflash else None,
-                            )
-                            if self.flash
-                            else lane_forward(
-                                self.lm,
-                                it.seg,
-                                capture_ids=self.dflash.capture_ids
-                                if self.dflash
-                                else (),
-                                captured=got if self.dflash else None,
-                            )
+                        out = self.layer.prefill(
+                            it.row,
+                            it.seg,
+                            it.start,
+                            it.end,
+                            capture_ids=self.dflash.capture_ids if self.dflash else (),
+                            captured=got if self.dflash else None,
                         )
-                        if it.row.req.prompt_logprobs is not None:
+                        if out is not None:
+                            parts.append(out)
+                        if (
+                            self.layer.caps.per_token_rows
+                            and it.row.req.prompt_logprobs is not None
+                        ):
                             from .prompt_logprobs import score_span
 
                             h = parts[-1]
@@ -1669,7 +1656,7 @@ class RoundDriver:
                     if pf is not None:
                         self._ple_lookahead(pf, items, budget)
                     span_t.append(time.perf_counter())
-                    if self.generic:
+                    if not self.layer.caps.per_token_rows:
                         # rows of ``hidden`` are the logits of the prompts finished this step: an item
                         # owns one row if it ends its prompt, none otherwise
                         run = 0
