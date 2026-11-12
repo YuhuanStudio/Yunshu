@@ -30,8 +30,33 @@ def _restore_pool_limit() -> None:
     mx.set_cache_limit(max(0, _STATE["limit"] - restore_buffer_bytes()))
 
 
+# Holders of a finished reply's buffers kept standing for its follow-up (instead of pooled):
+# (weak owner, attribute). Clearing the pool (idle trim) drops them too.
+_STANDING_HOLDERS: list = []
+
+
+def hold_standing(owner, attr: str) -> None:
+    """``owner.attr`` holds a finished reply's buffers in place of the pool: released with it."""
+    import weakref
+
+    _STANDING_HOLDERS[:] = [
+        (r, a) for r, a in _STANDING_HOLDERS if r() is not None and r() is not owner
+    ]
+    _STANDING_HOLDERS.append((weakref.ref(owner), attr))
+
+
+def pool_accepts(nbytes: int) -> bool:
+    """The pool's size rule (``offer_arrays``): a finished set no larger than its limit."""
+    return 0 < int(nbytes) <= _STATE["limit"]
+
+
 def clear_restore_buffers() -> None:
     _RESTORE_BUFFERS.clear()
+    for ref, attr in _STANDING_HOLDERS:
+        owner = ref()
+        if owner is not None:
+            owner.__dict__.pop(attr, None)
+    _STANDING_HOLDERS.clear()
     _restore_pool_limit()
 
 

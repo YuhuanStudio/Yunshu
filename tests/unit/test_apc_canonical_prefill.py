@@ -272,22 +272,28 @@ def test_reply_cache_is_found_on_the_checkpoint_policy_path_too():
     assert lookup(coordinator, ids)["prefix_len"] == 1206
 
 
-def test_standing_reply_cache_resumes_in_place_once():
+def test_standing_reply_cache_resumes_in_place_once(monkeypatch):
     """TensorFold's standing slot: the follow-up takes the live reply cache itself (no store
-    copy, no restore copy); another prompt does not, and it is taken only once."""
+    copy, no restore copy), and it is taken only once. Another prompt does not take it: the
+    buffers go to the restore pool, where a finished reply's buffers went before it was held."""
+    from yunshu_engine.kernels import buffer_cache
+
+    pooled = []
+    monkeypatch.setattr(buffer_cache, "offer_restore_buffers", pooled.append)
     manager = _mgr(prefill_stride=2048, prefill_alignment=64)
     coordinator = _coordinator(manager)
     ids = list(range(1300))
     rows = _cache(1206)
     coordinator.offer_standing(ids[:1206], rows, extra_hash=7)
-    other = ids[:700] + [9999] * 600
-    assert (
-        lookup(coordinator, other) is None
-        or lookup(coordinator, other)["warm_cache"] is not rows
-    )
     hit = lookup(coordinator, ids)
-    assert hit["prefix_len"] == 1206 and hit["warm_cache"] is rows
-    assert coordinator.take_standing() is None
+    assert hit["prefix_len"] == 1206 and hit["warm_cache"] is rows and hit["standing"]
+    assert coordinator.take_standing() is None and pooled == []
+
+    coordinator.offer_standing(ids[:1206], rows, extra_hash=7)
+    other = ids[:700] + [9999] * 600
+    miss = lookup(coordinator, other)
+    assert miss is None or miss["warm_cache"] is not rows
+    assert pooled == [rows] and coordinator.take_standing() is None
 
 
 def test_standing_reply_cache_is_found_by_another_generators_coordinator():
@@ -303,3 +309,30 @@ def test_standing_reply_cache_is_found_by_another_generators_coordinator():
     hit = lookup(second, ids)
     assert hit["prefix_len"] == 1206 and hit["warm_cache"] is rows
     assert first.take_standing() is None and second.take_standing() is None
+
+
+def test_retry_of_the_last_turn_hits_the_checkpoint_it_restored_bit_identically():
+    """A retry sends the previous turn's prompt again. Its reply's longer checkpoint supersedes
+    the restored one; the restored one is kept, so the retry restores it, and the output is the
+    arrays the first turn restored (2026-11-12: a retry fell back to 30720 and re-prefilled 2339
+    tokens, 2.95 s)."""
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    coordinator = _coordinator(manager)
+    ids = list(range(1300))
+    manager.store_exact_cache(
+        ids[:1024], _cache(1024), extra_hash=7
+    )  # a checkpoint on the grid
+    assert coordinator.store_decode_tail(
+        ids[:1206], _cache(1206), extra_hash=7
+    )  # off the grid
+    turn = ids[:1250]
+    first = lookup(coordinator, turn)
+    assert first["prefix_len"] == 1206
+    manager.begin_request()  # the next turn's reply is stored in a later request
+    assert coordinator.store_decode_tail(ids[:1290], _cache(1290), extra_hash=7)
+    retry = lookup(coordinator, turn)
+    assert retry["prefix_len"] == 1206
+    for a, b in zip(first["warm_cache"], retry["warm_cache"], strict=True):
+        if hasattr(a, "keys"):
+            assert a.offset == b.offset == 1206
+            assert mx.array_equal(a.keys, b.keys) and mx.array_equal(a.values, b.values)

@@ -1201,10 +1201,14 @@ class _Coordinator(APCCoordinator):
     # callers retain synchronous admission until they supply the same flush boundary.
     defer_checkpoint_stores = False
 
-    def store_decode_tail(self, token_ids, prompt_cache, *, extra_hash=0) -> bool:
+    def store_decode_tail(
+        self, token_ids, prompt_cache, *, extra_hash=0, owned=False
+    ) -> bool:
         """Store a finished reply's cache (prompt + the reply tokens it holds) at its own length,
         off the prefill grid, and remember that length for the follow-up's lookup
-        (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02)."""
+        (YUNSHU_NEXT_TURN_PREFILL=decode, user 2026-11-02). ``owned``: ``prompt_cache`` is a private
+        copy (the decode batch's cut-out) the checkpoint keeps as it is; retained anchors then view
+        it, as they view a stored copy."""
         if not self.enabled:
             return False
         from mlx_vlm.apc import snapshot_prompt_cache_row
@@ -1214,14 +1218,39 @@ class _Coordinator(APCCoordinator):
             return False
         tokens = tuple(map(int, token_ids))
         if not self.manager.store_exact_cache(
-            tokens, snapshot, extra_hash=extra_hash, _any_length=True
+            tokens, snapshot, extra_hash=extra_hash, _any_length=True, _owned=owned
         ):
             return False
+        if owned:
+            self.manager.share_anchor_rows(tokens, extra_hash)
+        self._note_decode_tail(len(tokens), extra_hash)
+        return True
+
+    def _note_decode_tail(self, n: int, extra_hash) -> None:
         tails = self.manager.__dict__.setdefault("_decode_tail_lengths", {})
         lengths = tails.setdefault(int(extra_hash), [])
-        if len(tokens) not in lengths:
-            lengths.append(len(tokens))
+        if n not in lengths:
+            lengths.append(n)
             del lengths[:-64]
+
+    def republish_restore_point(self, token_ids, prompt_cache, *, extra_hash=0) -> bool:
+        """Store, without a copy, the state a request resumed from: ``prompt_cache`` holds the
+        row's own prefill buffers once the decode batch has copied them (rows past the restore
+        point zeroed) and the recurrent state captured at the restore. A follow-up that resumed
+        a standing reply cache leaves no checkpoint of it in the table, so a retry of that
+        follow-up (the same prompt again) would re-prefill from the last grid checkpoint
+        (2.95 s at 33K); this one serves it bit for bit. An ordinary evictable entry, owned:
+        its bytes are counted once, as the buffers' only holder."""
+        if not self.enabled:
+            return False
+        tokens = tuple(map(int, token_ids))
+        if not self.manager.store_exact_cache(
+            tokens, prompt_cache, extra_hash=extra_hash, _owned=True, _any_length=True
+        ):
+            return False
+        self._note_decode_tail(len(tokens), extra_hash)
+        # what the last request restored: the supersede of its own reply keeps it for a retry
+        self.manager._last_hit = (tokens, int(extra_hash))
         return True
 
     def offer_standing(self, token_ids, rows, *, extra_hash=0) -> None:
@@ -1233,6 +1262,11 @@ class _Coordinator(APCCoordinator):
         coordinator, so the follow-up's lookup runs on another one (a standing cache kept here
         was never found: 8K turn 2 took the 8192 checkpoint, 2026-11-02)."""
         self.manager._standing = (tuple(map(int, token_ids)), rows, int(extra_hash))
+        from .kernels.buffer_cache import hold_standing
+
+        hold_standing(
+            self.manager, "_standing"
+        )  # the idle trim releases it with the pool
 
     def take_standing(self):
         return self.manager.__dict__.pop("_standing", None)
@@ -1254,6 +1288,9 @@ class _Coordinator(APCCoordinator):
                 with self.manager.lock:
                     self.manager.stats.hits += 1
                     self.manager.stats.matched_tokens += n
+                # what this request restored (the bits of the idle store's copy, when there is
+                # one): the supersede of its own reply keeps that checkpoint for a retry
+                self.manager._last_hit = (tokens, int(extra_hash))
                 logger.info(
                     "APC: resumed the standing reply cache in place (%d tokens)", n
                 )
@@ -1263,6 +1300,7 @@ class _Coordinator(APCCoordinator):
                     "prefix_len": n,
                     "extra_hash": extra_hash,
                     "full_input_ids": list(token_ids),
+                    "standing": True,
                 }
             # why the follow-up did not extend the standing reply: a cache miss must name its
             # cause (another conversation, a different salt, or a re-rendered reply)
@@ -1283,6 +1321,13 @@ class _Coordinator(APCCoordinator):
                 list(tokens[same : same + 4]),
                 list(token_ids[same : same + 4]),
             )
+            # Another prompt came first: the buffers go to the restore pool, where a finished
+            # reply's buffers went before they were held standing (same memory, and this
+            # request's restore writes into them instead of allocating).
+            self.manager._standing = None
+            from .kernels.buffer_cache import offer_restore_buffers
+
+            offer_restore_buffers(rows)
         tails = self.manager.__dict__.get("_decode_tail_lengths", {})
         for n in sorted(tails.get(extra_hash, ()), reverse=True):
             if n >= len(token_ids) or not kwargs["suffix_is_text_only"](n):
@@ -2464,6 +2509,17 @@ class YunshuAPCManager(APCManager):
                 if _sequence_hash(tokens[:n], extra_hash, self.block_size) == key:
                     chain[key] = n
         keep = set(thin_chain(chain, len(tokens)))
+        hit = self._last_hit
+        if (
+            hit is not None
+            and hit[1] == extra_hash
+            and len(hit[0]) < len(tokens)
+            and tokens[: len(hit[0])] == hit[0]
+        ):
+            # the checkpoint the last request restored: a retry of that request (the same
+            # prompt again) restores exactly this one, bit for bit; the chain thinning would
+            # drop it (33034 between 32768 and 33314 at the 2048 spacing)
+            keep.add(_sequence_hash(hit[0], extra_hash, self.block_size))
         chain.update(dropped_by_filter)
         dropped = 0
         with self.lock:
@@ -3048,6 +3104,17 @@ class YunshuAPCManager(APCManager):
                 else:
                     self.observation.hits[okey] = undo["oprior"]
             return
+
+    def holds_exact(self, token_ids, extra_hash) -> bool:
+        """A RAM checkpoint of exactly ``token_ids`` is in the table."""
+        key = _sequence_hash(tuple(map(int, token_ids)), extra_hash, self.block_size)
+        with self.lock:
+            entry = self._exact_cache.get(key)
+        return (
+            entry is not None
+            and entry.extra_hash == extra_hash
+            and tuple(entry.token_ids) == tuple(map(int, token_ids))
+        )
 
     def probe_exact_length(self, token_ids, extra_hash, maximum, minimum) -> int:
         """Length the next lookup_exact_cache would restore (HOT / WARM / SSD index), read from

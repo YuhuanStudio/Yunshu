@@ -12,6 +12,9 @@ patch release collects them.
 
 ### Highlights
 
+- Multi-turn follow-ups resume the previous reply's cache in place instead of copying it back
+  (Qwen3.8-27B, 32K: follow-up TTFT 0.192 → 0.14 s), and an exact retry of a turn hits that turn's
+  starting point (2.95 → 0.05 s). Output is bit-identical to a cold run; peak memory +0.35 GiB.
 - Dependencies move to mlx 0.32.4, mlx-vlm 0.7.12, mlx-audio 0.6.4 and transformers 5.22.2, with in-house
   fixes for two upstream changes (below). Speculation on and off stay token-identical.
 - Gemma and other non-Qwen models on the round driver decode each concurrent row on its own, so a

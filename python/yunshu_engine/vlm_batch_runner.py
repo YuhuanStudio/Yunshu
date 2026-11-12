@@ -1325,7 +1325,13 @@ class VLMBatchRunner:
 
     @staticmethod
     def _store_decode_cache(
-        group: Any, job: _Job, caches=None, window_tail=None, salt=None, stand=False
+        group: Any,
+        job: _Job,
+        caches=None,
+        window_tail=None,
+        salt=None,
+        stand=False,
+        owned=False,
     ) -> bool:
         """Store the cache the reply was decoded into, keyed by the prompt plus the tokens it holds:
         a follow-up that repeats the conversation then prefills only its new message
@@ -1336,20 +1342,7 @@ class VLMBatchRunner:
             logger.info("decode cache not stored: no APC, no caches or no reply tokens")
             return False
 
-        def held_rows(c) -> int | None:
-            # KVCache: an int offset; the lane's single-row BatchKVCache: _idx past its left padding
-            if getattr(c, "keys", None) is None:
-                return None
-            idx = getattr(c, "_idx", None)
-            pad = getattr(c, "left_padding", None)
-            if idx is not None and pad is not None:
-                return int(idx) - int(pad.reshape(-1)[0].item())
-            off = getattr(c, "offset", None)
-            if off is None:
-                return None
-            return int(off) if isinstance(off, int) else int(off.reshape(-1)[0].item())
-
-        offsets = {n for n in (held_rows(c) for c in caches) if n is not None}
+        offsets = {n for n in (_held_rows(c) for c in caches) if n is not None}
         tokens = list(job.ids) + list(job.generated)
         if len(offsets) != 1:
             logger.info(
@@ -1396,7 +1389,9 @@ class VLMBatchRunner:
             logger.info("decode cache not stored: the APC has no reply-cache store")
             return False
         t0 = time.perf_counter()
-        stored = store(tokens[:held], caches, extra_hash=salt)
+        # owned: the APC keeps ``caches`` as they are (a private cut-out copy), no second copy
+        extra = {"owned": True} if owned else {}
+        stored = store(tokens[:held], caches, extra_hash=salt, **extra)
         t1 = time.perf_counter()
         window = False
         if stored:
@@ -1494,7 +1489,14 @@ class VLMBatchRunner:
             self._flush_decode_cache()
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is not None and hasattr(coordinator, "take_standing"):
-            coordinator.take_standing()  # a standing cache its follow-up never claimed
+            unclaimed = (
+                coordinator.take_standing()
+            )  # a standing cache no follow-up claimed
+            if unclaimed is not None:
+                from .kernels.buffer_cache import offer_restore_buffers
+
+                with contextlib.suppress(Exception):
+                    offer_restore_buffers(unclaimed[1])
         pending = (group, job, list(caches), dflash_apc_window.take_decode_tail())
         self._decode_pending = pending
         executor = getattr(self, "_executor", None)
@@ -1515,21 +1517,30 @@ class VLMBatchRunner:
         if pending is None:
             return
         group, job, caches, tail = pending
+        staged = owned = False
         try:
-            self._store_decode_cache(
+            plan = _standing_plan(caches)
+            owned = plan == "copy"
+            stored = self._store_decode_cache(
                 group,
                 job,
                 caches=caches,
                 window_tail=tail,
                 salt=getattr(group, "driver_salt", None),
+                **({"owned": True} if owned else {}),
             )
+            owned = owned and bool(stored)
+            if stored and plan is not None:
+                staged = _stage_standing(group, job, caches, copy=owned)
         except Exception:  # an optimisation only: the next turn re-prefills
             logger.warning("deferred decode-cache store failed", exc_info=True)
         finally:
             from .kernels.buffer_cache import offer_restore_buffers
 
-            with contextlib.suppress(Exception):
-                offer_restore_buffers(caches)
+            # buffers the APC took (owned) are its own: never pooled for overwriting
+            if not staged and not owned:
+                with contextlib.suppress(Exception):
+                    offer_restore_buffers(caches)
 
     def _stand_decode_cache(self) -> bool:
         """Hand the held reply's cache to its follow-up's lookup as is (TensorFold's standing
@@ -1973,6 +1984,117 @@ OUT_LIMIT = 65536
 # a finished reply's decode cache is copied into the APC once the runner has been idle this
 # long (or at once when its follow-up arrives): a request sent right away does not wait on it
 DECODE_STORE_IDLE_S = 0.25
+
+
+def _held_rows(c) -> int | None:
+    """Rows a reply's attention cache holds. KVCache: an int offset; the lane's single-row
+    BatchKVCache: _idx past its left padding; None for a cache without keys."""
+    if getattr(c, "keys", None) is None:
+        return None
+    idx = getattr(c, "_idx", None)
+    pad = getattr(c, "left_padding", None)
+    if idx is not None and pad is not None:
+        return int(idx) - int(pad.reshape(-1)[0].item())
+    off = getattr(c, "offset", None)
+    if off is None:
+        return None
+    return int(off) if isinstance(off, int) else int(off.reshape(-1)[0].item())
+
+
+# Spare keys a reply's standing copy keeps past its rows: its follow-up appends its new message in
+# place when it fits (no restore copy; prefill attention reads the same bits at any KV capacity, probe
+# 1112-233219-00-fu-kv-stride-probe). 128 MiB per 27B reply; a longer message pays the one copy its
+# own prefill (> 2 s) dwarfs. Only the standing copy has it: the cut-out and the stored checkpoint stay
+# exact (a cut-out with this room raised the 96K memory-suite peak by 7 GiB, fu-mem-attrib 2026-11-13).
+STANDING_ROOM = 2048
+
+
+def _standing_plan(caches: list) -> str | None:
+    """How the idle store can leave a reply standing for its follow-up: "own" (the caches already
+    have STANDING_ROOM spare keys, e.g. a DFlash row decoded in place: the APC copies them as before
+    and they stand), "copy" (exact cut-out caches: the APC keeps them as they are, and the one copy
+    the store made before becomes the standing copy, with room), None (another layout: as before)."""
+    from mlx_vlm.models.cache import ArraysCache, KVCache
+
+    spare: set = set()
+    for c in caches:
+        if type(c) is ArraysCache:
+            continue
+        if type(c) is not KVCache or c.keys is None or c.values is None:
+            return None
+        spare.add(int(c.keys.shape[-2]) - int(c.offset))
+    if not spare:
+        return None
+    if min(spare) >= STANDING_ROOM:
+        return "own"
+    return "copy" if spare == {0} else None
+
+
+def _standing_copy(caches: list, n: int) -> list | None:
+    """New cache objects for a standing reply: K/V copied into buffers with STANDING_ROOM zero
+    keys after the ``n`` rows (one layer at a time), recurrent state as separate handles (the
+    follow-up's prefill replaces its cache's arrays: the stored checkpoint's must not change)."""
+    import mlx.core as mx
+    from mlx_vlm.models.cache import ArraysCache, KVCache
+
+    from .apc_manager import _single_native_arrays_row
+
+    out: list = []
+    for c in caches:
+        if type(c) is ArraysCache:
+            row = _single_native_arrays_row(c)
+            if row is None:
+                return None
+            out.append(row)
+            continue
+        kv = KVCache()
+        parts = []
+        for a in (c.keys, c.values):
+            pad = mx.zeros((*a.shape[:2], STANDING_ROOM, a.shape[3]), dtype=a.dtype)
+            parts.append(mx.concatenate([a[..., :n, :], pad], axis=2))
+        mx.eval(*parts)
+        kv.keys, kv.values = parts
+        kv.offset = n
+        out.append(kv)
+    return out
+
+
+def _stage_standing(group: Any, job: Any, caches: list, *, copy: bool = False) -> bool:
+    """After the idle store, leave the reply standing for its follow-up, which then resumes it in
+    place: no restore copy (40 ms of a 33K follow-up's 51 ms lookup, 2026-11-12), while the stored
+    checkpoint still serves a retry or a branch. Memory as before: the reply's buffers held standing
+    went to the restore pool; with ``copy`` the store kept them and this copy is the one the store
+    used to make. False (the caller pools uncopied buffers) when the pool would not keep them."""
+    coordinator = getattr(group.gen, "apc", None)
+    offer = getattr(coordinator, "offer_standing", None)
+    if offer is None:
+        return False
+    from .kernels.buffer_cache import pool_accepts
+
+    held = {n for n in (_held_rows(c) for c in caches) if n is not None}
+    if len(held) != 1:
+        return False
+    n = next(iter(held))
+    size = sum(
+        int(a.nbytes)
+        for c in caches
+        for a in (getattr(c, "keys", None), getattr(c, "values", None))
+        if a is not None and not isinstance(a, tuple)
+    )
+    if copy:
+        size = size * (n + STANDING_ROOM) // max(1, n)
+    if not pool_accepts(size):
+        return False
+    # "own": plain single-row caches the APC copied: they stand as they are (a row snapshot would
+    # view them cut to their rows and drop the room)
+    rows = _standing_copy(caches, n) if copy else list(caches)
+    if rows is None:
+        return False
+    salt = getattr(group, "driver_salt", None)
+    salt = int(job.apc_salt or 0) if salt is None else int(salt)
+    offer((list(job.ids) + list(job.generated))[:n], rows, extra_hash=salt)
+    logger.info("decode cache standing after its store: %d tokens", n)
+    return True
 
 
 @dataclass

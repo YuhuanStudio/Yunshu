@@ -993,10 +993,11 @@ def test_a_retry_reply_store_keeps_the_checkpoint_that_served_it():
     m.begin_request()  # a second retry still finds it
     cache, n = m.lookup_exact_cache(a[:100])
     assert n == 96 and cache is not None
-    # a linear follow-up (a later request that grew past it) still supersedes it
+    # a later request that grew past it keeps the checkpoint the previous request restored (the
+    # retry-of-the-last-turn rule, 2026-11-12): the next retry still hits it
     m.begin_request()
     m.store_exact_cache(a + reply + [7] * 28, _cache(132), _any_length=True)
-    assert 96 not in {len(e.token_ids) for e in m._exact_cache.values()}
+    assert 96 in {len(e.token_ids) for e in m._exact_cache.values()}
 
 
 def test_rehearsal_guard_covers_the_late_ssd_supersede_hook():

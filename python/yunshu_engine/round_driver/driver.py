@@ -386,6 +386,9 @@ class _Row:
     ahead: Any = (
         None  # lone generic row: the next step's token, already queued on the device
     )
+    # (prefix, per-cache recurrent snapshots) of a row that resumed a standing reply cache no
+    # checkpoint holds: republished from its own buffers when it joins (_republish_restore)
+    restore_point: Any = None
 
 
 @dataclass
@@ -814,6 +817,8 @@ class RoundDriver:
                 if row.mtp_cache is not None:
                     row.mtp_cache = list(warm[n:])
                 row.done = row.hit = prefix
+                if hit.get("standing"):
+                    row.restore_point = self._restore_point(row, warm, prefix)
                 with row.apc.manager.lock:
                     row.apc.manager.stats.restored_tokens += prefix
             row.apc.prepare_prefill(
@@ -836,6 +841,90 @@ class RoundDriver:
                 if row.mtp_cache is not None:
                     row.mtp_cache = self.head.make_cache()
             row.ckpts = []
+
+    def _republishes(self) -> bool:
+        """Joining the decode batch copies a row's prefill caches and drops them (the packed
+        slot batch and the MTP head's slots): the row's own buffers are then free to keep."""
+        from .mtp import MTPHead
+
+        return (
+            self.layer.caps.slot_decode
+            and type(self.batch) is DecodeBatch
+            and (self.head is None or type(self.head) is MTPHead)
+        )
+
+    def _restore_point(self, row: _Row, warm: list, prefix: int):
+        """What a row that resumed a standing reply cache needs to store that state later
+        without a copy: the recurrent states as restored (separate handles; the prefill
+        replaces them, never writes them) and nothing of the K/V, whose rows below ``prefix``
+        the prefill never writes. None when a checkpoint already holds that state (the idle
+        store) or the layout is not plain K/V + recurrent state."""
+        from mlx_vlm.models.cache import ArraysCache, KVCache
+
+        from ..apc_manager import _single_native_arrays_row
+
+        if not self._republishes() or row.apc is None or not row.req.cache_store:
+            return None
+        manager = row.apc.manager
+        holds = getattr(manager, "holds_exact", None)
+        if holds is None or holds(row.req.ids[:prefix], row.salt):
+            return None
+        snaps: list = []
+        for c in warm:
+            if type(c) is KVCache and c.keys is not None and c.offset == prefix:
+                snaps.append(None)
+                continue
+            snap = _single_native_arrays_row(c) if type(c) is ArraysCache else None
+            if snap is None:
+                return None
+            snaps.append(snap)
+        return prefix, snaps
+
+    def _republish_restore(self, row: _Row, caches: list) -> None:
+        """Store the state ``row`` resumed from, made of its own prefill buffers (``caches``,
+        the K/V the decode batch just copied and released) and the recurrent snapshots taken
+        at the restore: K/V rows from the restore point on are zeroed (the restore copy's
+        padding), and the buffers move into the checkpoint, their only holder (no copy)."""
+        point, row.restore_point = row.restore_point, None
+        if point is None or row.apc is None:
+            return
+        from mlx_vlm.models.cache import KVCache
+
+        prefix, snaps = point
+        if len(caches) != len(snaps):
+            return
+        out: list = []
+        zeroed: list = []
+        for c, snap in zip(caches, snaps, strict=True):
+            if snap is not None:
+                out.append(snap)
+                continue
+            if type(c) is not KVCache or c.keys is None or c.values is None:
+                return
+            kv = KVCache()
+            # moved, not shared: the zeroing below writes the buffer in place
+            kv.keys, kv.values, c.keys, c.values = c.keys, c.values, None, None
+            end = min(int(c.offset), int(kv.keys.shape[-2]))
+            if end > prefix:
+                kv.keys[..., prefix:end, :] = 0
+                kv.values[..., prefix:end, :] = 0
+                zeroed += [kv.keys, kv.values]
+            kv.offset = prefix
+            out.append(kv)
+        if zeroed:
+            mx.eval(*zeroed)
+        try:
+            ok = row.apc.republish_restore_point(
+                row.req.ids[:prefix], out, extra_hash=row.salt
+            )
+        except Exception:
+            logger.warning("restore point republish failed", exc_info=True)
+            return
+        logger.info(
+            "round driver: restore point of a standing resume %s (%d tokens, no copy)",
+            "kept" if ok else "not kept",
+            prefix,
+        )
 
     def atom(self, pos: int) -> int:
         """Atom size of the prompt span that starts at ``pos``."""
@@ -1227,6 +1316,12 @@ class RoundDriver:
         from .. import gpu_window
 
         gpu_window.boundary("join")
+        # the prefill caches of rows that resumed a standing reply cache, kept past the join
+        points = [
+            (r, list(r.cache or ()) + list(r.mtp_cache or ()))
+            for r in live
+            if r.restore_point is not None
+        ]
         self.batch.join(live)
         arrays = list(self.batch.arrays())
         ready = [r for r in live if r.drafting] if self.head is not None else []
@@ -1239,6 +1334,11 @@ class RoundDriver:
                 r.head_state = heads[id(r)]
                 arrays.append(r.head_state)
         mx.eval(*arrays)
+        for r, caches in points:
+            if r.cache is None and r.mtp_cache is None:  # both copied into slots
+                self._republish_restore(r, caches)
+            else:
+                r.restore_point = None
         logger.info(
             "round driver: %d row(s) joined the decode batch in %.1f ms, wall %.3f",
             len(live),

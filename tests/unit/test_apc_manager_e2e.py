@@ -140,8 +140,10 @@ def test_growth_head_reuse_supersede_and_lossless_output(model):
     assert stats[0].cached_tokens == 0 and stats[0].cache_tier == "none"
     assert stats[1].cached_tokens == len(s1) - 1 and stats[1].cache_tier == "ram"
     assert stats[2].cached_tokens == 301 and stats[2].cache_tier == "ram"  # the head
-    # s1's own checkpoints were superseded by s1b's; the head and both sessions' latest remain
-    assert sorted(mgr.snapshot()["entry_tokens"]) == [301, 384, 452, 512, 592]
+    # s1b's store supersedes s1's checkpoints except 502, the one s1b restored (s1 minus its last
+    # token): kept so a retry of s1b's previous turn hits it (contract of 2026-11-12). The head and
+    # both sessions' latest remain.
+    assert sorted(mgr.snapshot()["entry_tokens"]) == [301, 384, 452, 502, 512, 592]
     assert mgr.snapshot()["head_checkpoints"] == 1
 
     cold = driver_runner(model, processor=_processor())
