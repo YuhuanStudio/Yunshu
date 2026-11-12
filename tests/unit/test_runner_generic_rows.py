@@ -1,7 +1,7 @@
 """Regression (M1 C8): the runner builds generic-layer rows with the model's prompt inputs.
 
 ``GenericLayer.admit`` requires ``prompt_kwargs``; the runner must pick the generic request from the layer
-(``isinstance(driver.layer, GenericLayer)``), not from a driver attribute that M1 removed."""
+(``isinstance(getattr(driver, "layer", None), GenericLayer)``; test fakes may lack a layer), not from a driver attribute that M1 removed."""
 
 import inspect
 
@@ -11,7 +11,7 @@ def test_runner_reads_the_layer_not_a_driver_flag():
 
     src = inspect.getsource(vlm_batch_runner)
     assert 'getattr(driver, "generic"' not in src
-    assert "isinstance(driver.layer, GenericLayer)" in src
+    assert "isinstance(getattr(driver, \"layer\", None), GenericLayer)" in src
 
 
 def test_generic_layer_rows_get_prompt_inputs_on_admit():

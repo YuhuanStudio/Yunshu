@@ -1153,7 +1153,7 @@ class VLMBatchRunner:
         # the generic layer's rows always carry the model's prompt inputs (GenericLayer.admit requires them)
         from .round_driver.layer import GenericLayer
 
-        generic_rows = isinstance(driver.layer, GenericLayer)
+        generic_rows = isinstance(getattr(driver, "layer", None), GenericLayer)
         media = self._generic_request(job) if generic_rows else self._media_request(job)
         if media and not generic_rows:
             logger.info(
