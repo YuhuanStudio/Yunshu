@@ -511,6 +511,19 @@ def _config_has_audio(config: dict) -> bool:
     return has(config) or has(config.get("thinker_config"))
 
 
+def _log_stream_failure(exc: BaseException, req_id: str, prompt_tokens: int) -> None:
+    """An admission refusal is the expected 400/507 answer: one WARNING line, no traceback."""
+    if isinstance(exc, MemoryAdmissionError):
+        logger.warning(
+            "request %s refused by memory admission: prompt_tokens=%d fits_tokens=%s",
+            req_id,
+            prompt_tokens,
+            getattr(exc, "fits_tokens", None),
+        )
+        return
+    logger.error("VLM runner streaming error: %s", exc, exc_info=True)
+
+
 def _round_prefill_chunk() -> int:
     """Prompt tokens per round-driver prefill atom (one definition: round_driver/driver.py CHUNK).
     A decoding row only steps between prefill forwards, so small atoms keep it running beside a
@@ -3792,7 +3805,7 @@ class VLMEngine:
                 if not ok or reason is not None:
                     return
         except Exception as exc:
-            logger.error("VLM runner streaming error: %s", exc, exc_info=True)
+            _log_stream_failure(exc, req_id, prompt_tokens)
             queue.put_nowait(
                 RequestOutput(
                     request_id=req_id,
