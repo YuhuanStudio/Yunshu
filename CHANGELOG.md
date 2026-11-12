@@ -39,7 +39,7 @@ patch release collects them.
 
 - `/v1/yunshu/status` and `/v1/yunshu/requests/recent` report `dropped`: finished-request rows pushed out of the full 512-row console ring (the oldest row goes first).
 - Opt-in draft-LM (`YUNSHU_DRAFT_MODEL`) and Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) drafters on the round driver's generic layer.
-- Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`) and a GitHub pre-release.
+- Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`) and a GitHub pre-release. Each dev release's notes list only what changed since the previous dev release; the patch release collects them all.
 - Benchmark harnesses label a context length by the served turn-1 prompt tokens (template included) and fail a cell whose served length is off.
 
 ### Changed

@@ -24,7 +24,91 @@ def _drop_empty_subsections(body: str) -> str:
     return "\n\n".join(k for k in kept if k)
 
 
-def render_notes(changelog: str, version: str) -> str:
+def previous_dev(version: str) -> str | None:
+    """The dev release before ``version`` (X.Y.Z.devN -> X.Y.Z.dev(N-1)); None for dev1 or a patch."""
+    m = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)\.dev([0-9]+)", version)
+    if not m or int(m.group(2)) <= 1:
+        return None
+    return f"{m.group(1)}.dev{int(m.group(2)) - 1}"
+
+
+def _section_body(changelog: str, section: str) -> str:
+    headings = list(re.finditer(r"^## \[([^\]]+)\].*$", changelog, re.MULTILINE))
+    for index, heading in enumerate(headings):
+        if heading.group(1) == section:
+            end = (
+                headings[index + 1].start()
+                if index + 1 < len(headings)
+                else len(changelog)
+            )
+            return changelog[heading.end() : end].strip()
+    return ""
+
+
+def _entries(lines: list[str]) -> list[list[str]]:
+    """Group a subsection's lines into entries: a "- " bullet with its indented continuation
+    lines, or one table row; anything else is its own entry."""
+    groups: list[list[str]] = []
+    for line in lines:
+        if (
+            line.startswith((" ", "\t"))
+            and line.strip()
+            and groups
+            and groups[-1][0].lstrip().startswith("- ")
+        ):
+            groups[-1].append(line)
+        elif line.strip():
+            groups.append([line])
+    return groups
+
+
+def only_new_entries(body: str, previous_body: str) -> str:
+    """Keep the entries of ``body`` that ``previous_body`` did not already list: a dev release
+    describes what changed since the previous dev release, not everything since the last patch
+    (user 2026-11-12: dev1 and dev2 notes were mixed). Subsection headings stay; an entry is a
+    "- " bullet (with its continuation lines) or a table row; a table keeps its header rows when
+    one of its rows is new."""
+    seen = {
+        " ".join(x.strip() for x in group)
+        for chunk in re.split(r"(?m)^(?=### )", previous_body)
+        for group in _entries(chunk.splitlines()[1:])
+    }
+    out: list[str] = []
+    for chunk in re.split(r"(?m)^(?=### )", body):
+        lines = chunk.splitlines()
+        if not lines or not lines[0].startswith("### "):
+            continue  # the intro paragraph is replaced by the caller
+        kept: list[str] = []
+        table_head: list[str] = []
+        for group in _entries(lines[1:]):
+            text = group[0].strip()
+            key = " ".join(x.strip() for x in group)
+            if text.startswith("|"):
+                if (
+                    re.fullmatch(r"\|[\s:|-]+\|", text)
+                    or not table_head
+                    and not kept_table_row(kept)
+                ):
+                    table_head.append(group[0])
+                    continue
+                if key not in seen:
+                    kept.extend(table_head)
+                    table_head = []
+                    kept.append(group[0])
+            elif text.startswith("- ") and key not in seen:
+                kept.extend(group)
+        if kept:
+            out.append("\n".join([lines[0], ""] + kept))
+    return "\n\n".join(out)
+
+
+def kept_table_row(kept: list[str]) -> bool:
+    return any(line.strip().startswith("|") for line in kept)
+
+
+def render_notes(
+    changelog: str, version: str, previous_changelog: str | None = None
+) -> str:
     """Fail closed on absent versions and derive the comparison from the older entry."""
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(\.dev[0-9]+)?", version):
         raise ValueError(f"Invalid release version: {version}")
@@ -48,6 +132,13 @@ def render_notes(changelog: str, version: str) -> str:
     # The renderer owns the footer, so copied draft compare links cannot survive.
     body = re.sub(r"^\[Full changelog[^\n]*\n?", "", body, flags=re.MULTILINE).rstrip()
     body = _drop_empty_subsections(body)
+    since = previous_dev(version)
+    if since and previous_changelog is not None:
+        body = (
+            f"Changes since {since}. The next patch release collects every dev release.\n\n"
+            + only_new_entries(body, _section_body(previous_changelog, "Unreleased"))
+        )
+        older = since
     # 2026-11-11: v0.1.8.dev1 shipped empty headings and three entries; a release needs entries
     if not re.search(r"^- ", body, re.MULTILINE):
         raise ValueError(f"Changelog section {section} has no entries")
@@ -99,8 +190,16 @@ def main() -> None:
     parser.add_argument("version")
     parser.add_argument("--changelog", type=Path, default=Path("CHANGELOG.md"))
     parser.add_argument("--output", type=Path, default=Path("notes.md"))
+    parser.add_argument(
+        "--previous-changelog",
+        type=Path,
+        help="CHANGELOG.md at the previous dev tag: a devN (N > 1) lists only what is new since it",
+    )
     args = parser.parse_args()
-    args.output.write_text(render_notes(args.changelog.read_text(), args.version))
+    previous = args.previous_changelog.read_text() if args.previous_changelog else None
+    args.output.write_text(
+        render_notes(args.changelog.read_text(), args.version, previous)
+    )
 
 
 if __name__ == "__main__":
