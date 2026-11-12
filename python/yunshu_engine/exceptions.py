@@ -206,3 +206,16 @@ class MemoryGuardRejectedError(builtins.MemoryError):
     prompt + decode KV). The *builtin* ``MemoryError`` (this module defines its own, different
     ``MemoryError``) so every route answers it the way it answers an out-of-memory generation
     (507 / an ``oom`` error event), never as an empty completion."""
+
+
+# ── Metal live-buffer count ──
+
+RESOURCE_COUNT_MARK = "Resource limit ("
+
+
+def is_resource_count_failure(error: BaseException | str) -> bool:
+    """MLX's ``[metal::malloc] Resource limit (499000) exceeded``: the process holds the Metal
+    live-buffer maximum. Not a byte shortage, so freeing memory does not clear it; the server
+    must restart. Answered as a 507 with that guidance, never an opaque 500."""
+    text = str(error)
+    return RESOURCE_COUNT_MARK in text and "metal" in text.lower()

@@ -48,6 +48,7 @@ patch release collects them.
 
 ### Fixed
 
+- Metal live-buffer limit (`Resource limit (499000) exceeded`): answered as 507 `gpu_resource_limit` with restart guidance instead of an opaque 500.
 - Flash-Next / Qwen4: a hidden size the fused MoE kernel cannot tile now falls back to the upstream MoE (it failed the request before); fused-kernel installs that do not apply, MoE verify batches past the kernel's 16-row cap, and a Qwen3.5-family checkpoint with neither an MTP head nor a DFlash drafter are logged (the kernel cases also counted at `/monitoring/kernel-fallbacks`) instead of passing silently.
 - Flash-Next / Qwen4: with speculative decoding, positions before the sparse-attention start (the first ~2K tokens) verified on tile kernels whose rounding differs from one-token decode, so spec on and off could differ there; Flash-Next now verifies them on the row-exact plan (found from oMLX d403e4605).
 - Concurrent requests: a short prompt that arrived behind a long one waited for the long prompt's whole prefill (1K prompts behind a 128K one: 207-243 s). Prompts much shorter than the longest waiting one now prefill first, and the long one still advances. Outputs are unchanged.

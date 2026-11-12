@@ -17,6 +17,7 @@ from .context_window import (
     reject_overlong_prompt,
     require_non_empty_prompt,
 )
+from .exceptions import is_resource_count_failure
 from .fast_path_stats import FastPathStats
 from .kv_prefix_cache import store_opt_out
 from .stream_bridge import StreamBridge, make_stream_queue
@@ -1306,7 +1307,11 @@ class EngineStreamMixin:
                     break
                 if isinstance(item, BaseException):
                     err_msg = str(item).lower()
-                    is_oom = isinstance(item, MemoryError) or "memory" in err_msg
+                    is_oom = (
+                        isinstance(item, MemoryError)
+                        or "memory" in err_msg
+                        or is_resource_count_failure(item)
+                    )
                     if is_oom:
                         yield _engine.GenerationOutput(
                             text=_engine._clean_special_tokens(accumulated)

@@ -685,8 +685,42 @@ def create_app() -> FastAPI:
         """
         import traceback
 
+        from yunshu_engine.exceptions import is_resource_count_failure
         from yunshu_kv.disk_budget import is_enospc
 
+        if is_resource_count_failure(exc):
+            # the Metal live-buffer maximum is held for the life of the process: say so
+            logger.error(
+                "Metal live-buffer limit on %s %s: %s",
+                request.method,
+                request.url.path,
+                exc,
+            )
+            msg = (
+                "The GPU live-buffer limit was reached; restart the server to clear it"
+            )
+            body = {
+                "message": msg,
+                "type": "server_error",
+                "param": None,
+                "code": "gpu_resource_limit",
+            }
+            if request.url.path in _ANTHROPIC_PATHS:
+                return JSONResponse(
+                    status_code=507,
+                    content={
+                        "type": "error",
+                        "error": {"type": "api_error", "message": msg},
+                    },
+                )
+            return JSONResponse(
+                status_code=507,
+                content={
+                    "error": add_hint(
+                        body, 507, getattr(request.state, "request_id", None)
+                    )
+                },
+            )
         if is_enospc(exc):
             # a store ran out of disk: tell the client what to do, keep the details in the log
             logger.error(

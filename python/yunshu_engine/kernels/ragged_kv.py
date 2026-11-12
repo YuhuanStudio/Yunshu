@@ -74,6 +74,21 @@ def _shared(key: tuple, build):
     return hit
 
 
+def token_row_index(slots, lengths, H: int, cap: int, T: int) -> mx.array:
+    """Flat row ``(slot * H + h) * cap + n + t`` of each new token [B, H, T]. int64 once the
+    buffer's row count passes int32 (a 32-bit index would wrap and scatter into other rows)."""
+    dtype = (
+        mx.int64 if max(slots, default=0) * H * cap + H * cap > 2**31 - 1 else mx.int32
+    )
+    return mx.array(
+        [
+            [[(s * H + h) * cap + n + t for t in range(T)] for h in range(H)]
+            for s, n in zip(slots, lengths, strict=True)
+        ],
+        dtype=dtype,
+    )
+
+
 def _scatter_rows(buf: mx.array, index: mx.array, x: mx.array) -> mx.array:
     """``buf`` [S, H, CAP, W] with token rows ``index`` (flat ``(slot * H + h)
     * CAP + pos``, shape [B, H, T]) set to ``x`` [B, H, T, W]: one in-place
@@ -281,16 +296,10 @@ class RaggedKVCache:
         cap = self.capacity
         slots, lengths = tuple(self.slots), tuple(self.lengths)
 
-        def index():
-            return mx.array(
-                [
-                    [[(s * H + h) * cap + n + t for t in range(T)] for h in range(H)]
-                    for s, n in zip(slots, lengths, strict=True)
-                ],
-                dtype=mx.int32,
-            )
-
-        idx = _shared(("write", slots, lengths, H, cap, T), index)
+        idx = _shared(
+            ("write", slots, lengths, H, cap, T),
+            lambda: token_row_index(slots, lengths, H, cap, T),
+        )
         self._set_buffers(
             [
                 _scatter_rows(b, idx, a)
@@ -521,7 +530,9 @@ def _note_lane_miss(queries: Any, keys: Any) -> None:
 
     fallbacks.record(
         "dense_lane_attention",
-        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} dtype={queries.dtype}: stock attention",
+        lambda: (
+            f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} dtype={queries.dtype}: stock attention"
+        ),
     )
 
 
