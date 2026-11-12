@@ -56,6 +56,25 @@ class CellResult:
     cached: bool = False
 
 
+def reprioritize_run(run, gq: Gpuq, priority: int) -> list:
+    """Make `priority` the run's priority for every later cell and move its queued jobs to it.
+    Cells with an explicit cell priority keep theirs. Returns the job ids that moved."""
+    run.set_priority(priority)
+    moved: list = []
+    for stage_file in sorted(run.path.glob("*.jsonl")):
+        stage = stage_file.stem
+        queued: dict = {}  # cell key -> its latest submission that has no outcome yet
+        for r in run.rows(stage):
+            if r.get("ev") == "cell_submitted":
+                queued[r.get("cell")] = r
+            elif r.get("ev") in ("cell_done", "cell_cancelled"):
+                queued.pop(r.get("cell"), None)
+        for sub in queued.values():
+            if sub.get("inherit", True) and gq.reprioritize(sub["job"], priority):
+                moved.append(sub["job"])
+    return moved
+
+
 def default_validate(path: Path) -> tuple[bool, str]:
     """Fail closed: evidence must exist and end with a record that says complete=true."""
     from .core import read_jsonl
@@ -81,14 +100,14 @@ class Executor:
         self.cache_dir = (
             cache_dir if cache_dir is not None else VERIFY_ROOT / "cellcache"
         )
-        self.run, self.gq, self.label, self.log, self.priority = (
-            run,
-            gq,
-            label,
-            log,
-            priority,
-        )
+        self.run, self.gq, self.label, self.log = run, gq, label, log
+        self._base_priority = priority
         self.jobs: list = []  # (stage, cell, job id) for the verdict
+
+    @property
+    def priority(self) -> int:
+        """The run's current priority: `yv reprioritize` may change it while this run is live."""
+        return self.run.priority_override(self._base_priority)
 
     # -- helpers
     def _cached(self, cell: Cell) -> CellResult | None:
@@ -200,6 +219,8 @@ class Executor:
                 "attempt": attempt,
                 "sig": cell.sig,
                 "argv": argv,
+                # an explicit cell priority is not moved by `yv reprioritize`
+                "inherit": not cell.priority,
             },
         )
         self.log(f"submitted {cell.stage}/{cell.key} -> {jid}")

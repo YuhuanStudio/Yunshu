@@ -130,6 +130,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["reps"] = a.reps
     if getattr(a, "cell_timeout_min", None) is not None:
         cfg["cell_timeout_min"] = a.cell_timeout_min
+    if getattr(a, "kinds", None):
+        cfg["kinds"] = [x for x in a.kinds.split(",") if x]
     if getattr(a, "mmlu_n", None):
         cfg["mmlu_n"] = a.mmlu_n
     if getattr(a, "mem_sizes", None):

@@ -304,6 +304,19 @@ class RunDir:
     def cell_path(self, stage: str, cell: str, suffix: str = "jsonl") -> Path:
         return self.path / "cells" / f"{stage}.{cell}.{suffix}"
 
+    def priority_override(self, default: int) -> int:
+        """Priority set by `yv reprioritize`; the running process reads it before each submit."""
+        p = self.path / "priority.json"
+        if not p.exists():
+            return default
+        try:
+            return int(json.loads(p.read_text())["priority"])
+        except (ValueError, KeyError, TypeError):
+            return default
+
+    def set_priority(self, priority: int) -> None:
+        write_json_atomic(self.path / "priority.json", {"priority": int(priority)})
+
 
 # ── gpuq client ──────────────────────────────────────────────────────────
 class Job:
@@ -431,6 +444,13 @@ class Gpuq:
 
     def cancel(self, jid: str) -> None:
         subprocess.run([self.bin, "cancel", jid], capture_output=True)
+
+    def reprioritize(self, jid: str, priority: int) -> bool:
+        """True when a pending job took the new priority (a started job keeps its own)."""
+        r = subprocess.run(
+            [self.bin, "reprioritize", jid, str(priority)], capture_output=True
+        )
+        return r.returncode == 0
 
     def log_tail(self, jid: str, n: int = 12) -> str:
         r = subprocess.run([self.bin, "log", jid], capture_output=True, text=True)

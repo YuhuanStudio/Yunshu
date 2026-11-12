@@ -123,6 +123,15 @@ SUITES = {
         "reps": 1,
     },
     "snapshot": {"stages": ["snapshot"]},
+    # SSD prefix-cache restore TTFT: ssd_ttft / ssd_ttft_profile were in no suite or gate before
+    # 2026-11-12 (HARNESS row 72); long contexts, where a disk restore pays off
+    "ssd": {
+        "stages": ["preflight", "ssd_ttft", "ssd_ttft_profile"],
+        "ctx": [32768, 131072],
+        "kinds": ["code"],
+        "spec_off": False,
+        "reps": 1,
+    },
     # cheap counter check: one short run per arm, no timing reps (docs/guides/VERIFY.md, "probe")
     "probe": {
         "stages": ["preflight", "probe"],

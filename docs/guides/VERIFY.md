@@ -118,6 +118,12 @@ yv ab --base main --cand <dir> --suite kld --model <Flash-Next dir> --cand-env Y
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
 `--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol`, `--spec-off`.
 
+`ssd` (preflight, `ssd_ttft`, `ssd_ttft_profile` at 32K / 128K): SSD prefix-cache restore TTFT. These two stages were in no suite before 2026-11-12. `tests/unit/test_yv_suite_coverage.py` fails when a stage is in no suite and not on its known-gap list.
+
+**Identity across arms.** `--arith-change-ok` marks cells whose digests differ on purpose; those cells are listed as `arith_changed` and the kld stages must then pass. The `--mem-gb` default is a guess, not a measured footprint (its value is in `cli.py`).
+
+**Tok/s definitions.** The server log's tok/s and the client's `(completion tokens - 1) / (t_last - t_first)` differ by under 3% on the runs checked.
+
 **Chinese coverage.** Verification is not English-only. The `zh` suite (identity with spec on == off, then speed, at 1K / 8K / 32K) runs two Chinese kinds, `zhcn` (Simplified) and `zhtw` (Taiwan Traditional), built from Chinese Wikipedia articles (CC BY-SA 4.0; sources in `tfnew/zh_src/SOURCES.md`) at 1K to 128K like the English prompts. `quick` also runs `zhcn` and `zhtw` next to `prose` and `code`. Other suites keep their own `kinds` key (English by default). Mostly-Chinese prompts exercise different tokenization and draft behaviour, and an English-only run once missed a speculative-decode crash on them.
 
 ## Resume

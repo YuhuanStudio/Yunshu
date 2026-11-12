@@ -176,7 +176,7 @@ lane projections and the drafters are the dense model's; the feed-forward is the
 sparse block runs the router, the routed experts (one `gather_qmm` call per token and expert, so a token's rows do not depend on
 the other tokens of the call) and the shared expert. Prefill spans use the model's own block call. The packed `forward._mlp`
 (research / tests) runs a sparse block once per segment. Arithmetic gates on a real MoE checkpoint (solo == concurrent, spec on ==
-off) are GPU checks, not CPU-test claims.
+off) are GPU checks, not CPU-test claims. No receipt for them is recorded in this file yet, so the MoE path counts as unvalidated until a yv run cites one.
 
 ## Generic layer (every other mlx-vlm family)
 

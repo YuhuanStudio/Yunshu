@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """TurboQuant KV Cache — per-layer mixed-precision KV quantization.
 
+Not mlx-vlm's TurboQuant KV cache: the two share a name only. This is a lossy memory option, never a default.
+
 Instead of uniform quantization across all layers,
 TurboQuant applies different quantization levels to different attention
 layers based on their sensitivity:

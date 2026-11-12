@@ -2116,6 +2116,18 @@ def _patch_job(path: Path, **kw) -> None:
             _write(path, data)
 
 
+def _reprioritize(path: Path, priority: int) -> bool:
+    """Set a still-pending job's priority; False when it has started, finished or was cancelled."""
+    with job_lock(path):
+        data = _read(path)
+        if not data or data.get("state") != "pending" or data.get("cancel"):
+            return False
+        data["priority"] = priority
+        data["priority_requested"] = priority
+        _write(path, data)
+        return True
+
+
 FINAL = {"done", "failed", "timeout", "stalled", "cancelled", "lost"}
 
 
@@ -2383,6 +2395,9 @@ def main() -> int:
     sub.add_parser("stats").add_argument("--hours", type=float, default=24.0)
     sub.add_parser("log").add_argument("id")
     sub.add_parser("cancel").add_argument("id")
+    rp = sub.add_parser("reprioritize")
+    rp.add_argument("id")
+    rp.add_argument("priority", type=int)
     sub.add_parser("_daemon")
     sub.add_parser("digest", add_help=False)  # flags handled by gpuq_digest.py
     sub.add_parser("report", add_help=False)  # flags handled by gpuq_report.py
@@ -2447,6 +2462,11 @@ def main() -> int:
     elif a.op == "cancel":
         path = JOBS / f"{a.id}.json"
         _patch_job(path, cancel=True)
+    elif a.op == "reprioritize":
+        # only queued work moves; a job that already started keeps the priority it ran with
+        if not _reprioritize(JOBS / f"{a.id}.json", a.priority):
+            print(f"gpuq: {a.id} is not pending", file=sys.stderr)
+            return 1
     elif a.op == "_daemon":
         # A daemon started from a background shell job inherits SIGINT ignored,
         # and so would every job: timeouts and cancels (SIGINT first) would then

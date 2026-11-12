@@ -302,7 +302,7 @@ prefill would.
 | Storage tiers | external SSD, HDD, NAS (`YUNSHU_VLM_APC_DISK_TIERS`) | off; each volume's speed is measured and it is used only when restoring beats recomputing |
 
 Repeated or edited long prompts, multi-turn chats and agent loops restore from the nearest
-checkpoint instead of prefilling again. A follow-up turn reuses the decode cache of the reply it continues
+checkpoint instead of prefilling again. In VLM chats, a follow-up turn reuses the decode cache of the reply it continues
 (`YUNSHU_NEXT_TURN_PREFILL`, default `decode`). When a conversation grows, older checkpoints of the same
 conversation are replaced rather than piling up. `yunshu cache status` and `yunshu cache gc` show
 and clean the SSD caches. SSD hits restore through MLX's native safetensors reader (32K hit TTFT 440 -> 272 ms).

@@ -11,7 +11,8 @@ from pathlib import Path
 
 from . import gate as gate_mod
 from . import runner
-from .core import REPO, InfraError, resolve_arm
+from .core import REPO, Gpuq, InfraError, resolve_arm
+from .execute import reprioritize_run
 from .gate import local_env
 from .suites import STAGES, SUITES
 
@@ -62,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     ab.add_argument(
         "--quick",
         action="store_true",
-        help="suite quick: identity + speed on 1K/8K, quality 200; base arm cached",
+        help="suite quick: probe, smoke, identity, apc, kld, speed on 1K/2K/8K (prose, code, zh); no quality stage; base arm cached",
     )
     ab.add_argument(
         "--reuse-base-speed",
@@ -94,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="smoke must see the candidate path: log:REGEX | field:KEY=REGEX | spec:MODE",
     )
     ab.add_argument("--ctx", help="override suite contexts, e.g. 1024,8192")
+    ab.add_argument(
+        "--kinds",
+        help="override suite prompt kinds, e.g. code,prose",
+    )
     ab.add_argument("--reps", type=int, help="speed reps (default from suite, 3)")
     ab.add_argument(
         "--cell-timeout-min",
@@ -186,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("run", help="run directory or name")
     wt = sub.add_parser("wait", help="block until a run has a verdict")
     wt.add_argument("run")
+    rp = sub.add_parser(
+        "reprioritize",
+        help="change a live run's priority: later cells and its queued jobs use it",
+    )
+    rp.add_argument("run")
+    rp.add_argument("priority", type=int)
     gt = sub.add_parser(
         "gate", help="release gate through gpuq with per-stage persistence"
     )
@@ -261,6 +272,12 @@ def main(argv: list | None = None) -> int:
             return 0
         if a.cmd == "wait":
             return runner.wait_run(runner.load_run(a.run))
+        if a.cmd == "reprioritize":
+            moved = reprioritize_run(runner.load_run(a.run), Gpuq(), a.priority)
+            print(
+                f"priority {a.priority}; moved {len(moved)} queued job(s): {' '.join(moved)}"
+            )
+            return 0
         if a.cmd == "gate":
             return gate_mod.run_gate(
                 [s for s in a.stages.split(",") if s],
