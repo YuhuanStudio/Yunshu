@@ -24,7 +24,16 @@ GS = 32  # dims per scale group
 # threadgroup just filled from the int8 codes.
 _LOAD_OLD = """    auto ks = tensor(kh + (int64_t)ts * D, dextents<int, 2>{D, N}, array<int, 2>{1, D})
         .template slice<D, N>(0, 0);
-    auto vs = tensor(vh + (int64_t)ts * D, dextents<int, 2>{D, N}, array<int, 2>{1, D})
+    device bfloat16_t* vsrc = vh + (int64_t)ts * D;
+    if (ts + N > kend) {
+      // the row's last step: its V rows with zeros past the chunk's last key, so a non-finite
+      // value past the row's length never meets its zero probability (0 * NaN)
+      for (int e = int(tid); e < N * D; e += 256)
+        vz[e] = ts + e / D < kend ? vsrc[e] : bfloat16_t(0.0f);
+      threadgroup_barrier(mem_flags::mem_device);
+      vsrc = vz;
+    }
+    auto vs = tensor(vsrc, dextents<int, 2>{D, N}, array<int, 2>{1, D})
         .template slice<D, N>(0, 0);
 """
 _LOAD_NEW = """    {
@@ -34,7 +43,9 @@ _LOAD_NEW = """    {
         const int64_t src = (row0 + ts + r) * D + d;
         const int64_t sidx = (row0 + ts + r) * (D / GS) + d / GS;
         kq[e] = bfloat16_t(float(keys[src]) * float(k_scales[sidx]));
-        vq[e] = bfloat16_t(float(values[src]) * float(v_scales[sidx]));
+        // V past the chunk's last key is zero (0 * NaN from a stale scale cannot reach the sum)
+        vq[e] = ts + r < kend ? bfloat16_t(float(values[src]) * float(v_scales[sidx]))
+                              : bfloat16_t(0.0f);
       }
       threadgroup_barrier(mem_flags::mem_device);
     }
@@ -47,6 +58,7 @@ _LOAD_NEW = """    {
 # accumulator's type) points at the scratch too
 _PTR_OLD = """  device bfloat16_t* kh = const_cast<device bfloat16_t*>(keys) + row0 * D;
   device bfloat16_t* vh = const_cast<device bfloat16_t*>(values) + row0 * D;
+  device bfloat16_t* vz = VZ + ((int64_t)b * HKV + hk) * N * D;  // the row's zero-padded last step
 """
 _PTR_NEW = """  const int64_t tg = int64_t(threadgroup_position_in_grid.y);
   device bfloat16_t* kq = scratch + tg * (2 * N * D);

@@ -361,6 +361,7 @@ _TILE = r"""
   const int64_t row0 = ((int64_t)slots[b] * HKV + hk) * CAP;
   device bfloat16_t* kh = const_cast<device bfloat16_t*>(keys) + row0 * D;
   device bfloat16_t* vh = const_cast<device bfloat16_t*>(values) + row0 * D;
+  device bfloat16_t* vz = VZ + ((int64_t)b * HKV + hk) * N * D;  // the row's zero-padded last step
   constexpr auto qk_desc = matmul2d_descriptor(
       M, N, D, false, true, false, matmul2d_descriptor::mode::multiply);
   constexpr auto pv_desc = matmul2d_descriptor(
@@ -384,7 +385,16 @@ _TILE = r"""
     const int ts = min(t0, CAP - N);  // stay inside the buffer; keys < t0 masked
     auto ks = tensor(kh + (int64_t)ts * D, dextents<int, 2>{D, N}, array<int, 2>{1, D})
         .template slice<D, N>(0, 0);
-    auto vs = tensor(vh + (int64_t)ts * D, dextents<int, 2>{D, N}, array<int, 2>{1, D})
+    device bfloat16_t* vsrc = vh + (int64_t)ts * D;
+    if (ts + N > kend) {
+      // the row's last step: its V rows with zeros past the chunk's last key, so a non-finite
+      // value past the row's length never meets its zero probability (0 * NaN)
+      for (int e = int(tid); e < N * D; e += 256)
+        vz[e] = ts + e / D < kend ? vsrc[e] : bfloat16_t(0.0f);
+      threadgroup_barrier(mem_flags::mem_device);
+      vsrc = vz;
+    }
+    auto vs = tensor(vsrc, dextents<int, 2>{D, N}, array<int, 2>{1, D})
         .template slice<D, N>(0, 0);
     auto sc = qk.template get_destination_cooperative_tensor<
         decltype(q0), decltype(ks), float>();
@@ -492,7 +502,7 @@ def _kernel(name: str):
                     "work",
                     "wstart",
                 ],
-                output_names=["PO", "PM", "PL"],
+                output_names=["PO", "PM", "PL", "VZ"],
                 source=_TILE,
                 header=_TILE_HEADER,
                 ensure_row_contiguous=False,
@@ -886,13 +896,13 @@ def _attend(
             output_dtypes=[mx.float32, mx.float32, mx.float32, mx.bfloat16],
         )
     elif tile:
-        po, pm, pl = _kernel("tile")(
+        po, pm, pl, _vz = _kernel("tile")(
             inputs=inputs + [work, wstart],
             template=tmpl + [("WL", wl)],
             grid=(256, HKV * int(work.size), 1) if wl else (256, HKV * nc, B),
             threadgroup=(256, 1, 1),
-            output_shapes=out_shapes,
-            output_dtypes=[mx.float32, mx.float32, mx.float32],
+            output_shapes=out_shapes + [(B * HKV * 64 * D,)],
+            output_dtypes=[mx.float32, mx.float32, mx.float32, mx.bfloat16],
         )
     elif use_kp:
         po, pm, pl = _kernel(name.replace("partial", "keypar"))(

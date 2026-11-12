@@ -1,6 +1,6 @@
-"""Row 339: the tile kernel multiplies every loaded V row by its probability, masked keys
-included, so a NaN past a row's length reaches the output (0 * NaN). Strict xfail until the
-kernel masks V itself; flip to a plain test when it passes."""
+"""Row 339: the tile kernel multiplied every loaded V row by its probability, masked keys
+included, so a NaN past a row's length reached the output (0 * NaN). The V tile now ends at
+the chunk's last key (zeros past it)."""
 
 import pytest
 
@@ -14,7 +14,6 @@ from yunshu_engine.kernels.ragged_attention import ragged_decode_attention, tile
 H, HKV, D = 24, 4, 256
 
 
-@pytest.mark.xfail(strict=True, reason="row 339: tile kernel reads unmasked V (0*NaN)")
 @pytest.mark.parametrize("T", [1, 8])
 def test_tile_output_ignores_nan_past_row_length(T):
     if not tile_ready():

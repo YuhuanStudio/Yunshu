@@ -607,7 +607,7 @@ def _tile_partials(q_fused, keys, values, lengths, slots, scale, plan, t_tokens,
     h = int(q_fused.shape[2]) // 8 * hkv
     g = h // hkv
     work, wstart, nslot = plan
-    po, pm, pl = ra._kernel("tile")(
+    po, pm, pl, _vz = ra._kernel("tile")(
         inputs=[q_fused, keys, values, lengths, slots, scale, work, wstart],
         template=[
             ("D", d),
@@ -622,8 +622,14 @@ def _tile_partials(q_fused, keys, values, lengths, slots, scale, plan, t_tokens,
         ],
         grid=(256, hkv * int(work.size), 1),
         threadgroup=(256, 1, 1),
-        output_shapes=[(nslot * h * d,), (nslot * h,), (nslot * h,)],
-        output_dtypes=[mx.float32, mx.float32, mx.float32],
+        output_shapes=[
+            (nslot * h * d,),
+            (nslot * h,),
+            (nslot * h,),
+            # VZ: one zero-padded V step per (row, KV head)
+            (int(lengths.size) * hkv * 64 * d,),
+        ],
+        output_dtypes=[mx.float32, mx.float32, mx.float32, mx.bfloat16],
     )
     return po, pm, pl, wstart
 
