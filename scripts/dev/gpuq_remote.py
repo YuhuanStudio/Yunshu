@@ -157,6 +157,90 @@ def verify_tree_conflict(cmd, env):
     return None
 
 
+# Absolute paths a job names. Relative paths resolve against its cwd, so they are not named here.
+GIT_PATH_RE = re.compile(r"(?<![\w./-])/[^\s:'\";=,()]+")
+# The laptop lane replaces these, or they name the cwd rather than what the job runs.
+UNSYNCED_ENV = {"PATH", "HOME", "TMPDIR", "UV_CACHE_DIR", "GPUQ_DIR", "PWD", "OLDPWD"}
+
+
+def _checkout(path, cache):
+    """(toplevel, common git dir) of the nearest existing directory at or above path, or None
+    outside a checkout. Cached per directory: a job names a dozen paths in one checkout."""
+    d = path
+    while not os.path.isdir(d):
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+    if d not in cache:
+        top = subprocess.run(
+            ["git", "-C", d, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+        common = subprocess.run(
+            ["git", "-C", d, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+        )
+        ok = top.returncode == 0 and common.returncode == 0
+        cache[d] = (
+            (
+                top.stdout.strip(),
+                os.path.abspath(os.path.join(d, common.stdout.strip())),
+            )
+            if ok
+            else None
+        )
+    return cache[d]
+
+
+def _tracked(top, path):
+    """Whether git tracks path (a file or a directory with tracked files) in top's index."""
+    return (
+        subprocess.run(
+            ["git", "-C", top, "ls-files", "--error-unmatch", "--", path],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def source_tree_refusals(cmd, env, cwd):
+    """Reasons the laptop cannot run a job from its one synced source tree. The laptop gets the
+    job's checkout (or verify tree) at HEAD plus tracked edits, so refused: a named path in
+    another checkout or worktree, and a named path that exists but is untracked (2026-11-12:
+    several jobs lost a queue round to rc=4 'file or directory not found' on the laptop).
+    Paths that are not in a checkout (checkpoints, outputs, devices) and .venv interpreters,
+    which the laptop maps to its own venv, are not checked."""
+    cache = {}
+    trees = verify_trees(cmd, env)
+    home = _checkout(trees[0] if trees else cwd, cache)
+    src = home[0] if home else None
+    # Only checkouts of this repo count: other repos named in a job (Homebrew, a plugin) are not
+    # source the laptop copies. Without a checkout at cwd, this repo is the one gpuq lives in.
+    own = (home or _checkout(str(Path(__file__).resolve().parent), cache))[1]
+    texts = [str(v) for v in cmd] + [
+        str(v) for k, v in env.items() if k not in UNSYNCED_ENV
+    ]
+    reasons, seen = [], set()
+    for text in texts:
+        for match in GIT_PATH_RE.finditer(text):
+            path = match[0]
+            if "/.venv" in path or path in seen:
+                continue
+            seen.add(path)
+            found = _checkout(path, cache)
+            if found is None or found[1] != own:
+                continue
+            top = found[0]
+            if top != src:
+                reasons.append(f"{path} is in {top}, not the job's source tree {src}")
+            elif os.path.exists(path) and not _tracked(src, path):
+                reasons.append(f"{path} is untracked in {src}")
+    return reasons
+
+
 def run_cwd(job, top, wt, pairs):
     """The job's cwd on the laptop. A verify-tree job's cwd is the main checkout, which the
     laptop must not run: it runs the synced worktree instead."""

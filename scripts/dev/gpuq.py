@@ -1034,6 +1034,14 @@ def submit(
         m3_refused.append(tree_conflict)
     if device != "m5":
         m3_refused += gpuq_remote.m3_input_refusals(cmd, dict(os.environ))
+        source_refusals = gpuq_remote.source_tree_refusals(
+            cmd, dict(os.environ), os.getcwd()
+        )
+        if device == "m3" and source_refusals:
+            raise ValueError(
+                "M3 cannot see the job's sources: " + "; ".join(source_refusals)
+            )
+        m3_refused += source_refusals
     if device == "m3" and m3_refused:
         raise ValueError(
             f"M3: checkpoints {m3_refused} are not allowed on the laptop; "

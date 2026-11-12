@@ -733,6 +733,8 @@ def test_two_verify_trees_refuse_m3(queue, monkeypatch):
     for key, value in list(os.environ.items()):
         if "/verify/trees/" in value:
             monkeypatch.delenv(key)
+    # the gpuq job running this test exports its own worktree's PYTHONPATH: not the verify tree's
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.setattr("subprocess.check_output", _toplevel_of)
     cmd = ["true", VERIFY_TREE + "/a.py", OTHER_TREE + "/b.py"]
     with pytest.raises(ValueError, match="verify tree"):
@@ -863,3 +865,95 @@ def test_tfb_out_directory_is_collected_back(queue, monkeypatch, tmp_path):
         for src, dest, _ in back
     )
     assert any(src.endswith(cell.name) for src, _, _ in back)
+
+
+def _git(cwd, *args):
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def checkouts(tmp_path, monkeypatch):
+    """A main checkout with one tracked file and a detached worktree of it (real git)."""
+    main = (tmp_path / "main").resolve()
+    main.mkdir()
+    _git(main, "init", "-q")
+    (main / "a.py").write_text("x = 1\n")
+    _git(main, "add", "a.py")
+    _git(main, "commit", "-q", "-m", "init")
+    wt = (tmp_path / "wt").resolve()
+    _git(main, "worktree", "add", "-q", "--detach", str(wt))
+    monkeypatch.setenv("GPUQ_NO_PREFLIGHT", "1")
+    return main, wt
+
+
+def test_worktree_job_with_tracked_sources_stays_on_laptop(
+    queue, checkouts, monkeypatch
+):
+    """A worktree cwd whose named files are tracked in that worktree still goes to M3."""
+    _, wt = checkouts
+    monkeypatch.chdir(wt)
+    jid = queue.submit(["true", str(wt / "a.py")], "wt-clean", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] == []
+    assert queue._m3_eligible(row)
+
+
+def test_named_path_in_other_checkout_keeps_any_job_off_laptop(
+    queue, checkouts, monkeypatch
+):
+    """A worktree job that names a file of the main checkout: the laptop would run the main
+    checkout's stale copy (or fail rc=4), so the any job stays on M5."""
+    main, wt = checkouts
+    monkeypatch.chdir(wt)
+    jid = queue.submit(["true", str(main / "a.py")], "cross", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] and not queue._m3_eligible(row)
+    with pytest.raises(ValueError, match="not the job's source tree"):
+        queue.submit(["true", str(main / "a.py")], "cross-m3", 1, 0, device="m3")
+    assert len(list(queue.JOBS.glob("*.json"))) == 1
+
+
+def test_untracked_test_file_keeps_any_job_off_laptop(queue, checkouts, monkeypatch):
+    """A test file not yet committed is absent from the laptop's sync (rc=4 there)."""
+    main, _ = checkouts
+    new = main / "test_new.py"
+    new.write_text("def test_x():\n    pass\n")
+    monkeypatch.chdir(main)
+    jid = queue.submit(["true", str(new)], "untracked", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] and not queue._m3_eligible(row)
+    with pytest.raises(ValueError, match="untracked"):
+        queue.submit(["true", str(new)], "untracked-m3", 1, 0, device="m3")
+
+
+def test_clean_main_checkout_job_still_goes_to_laptop(queue, checkouts, monkeypatch):
+    """Regression guard: tracked files of the main checkout, a checkpoint and a .venv
+    interpreter (mapped to the laptop's venv) do not refuse an any job."""
+    main, _ = checkouts
+    monkeypatch.chdir(main)
+    monkeypatch.setenv("PATH", f"{main}/scripts/dev:/usr/bin:/bin")
+    model = "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16"
+    cmd = [str(main / ".venv/bin/python"), str(main / "a.py"), "--model", model]
+    jid = queue.submit(cmd, "clean", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] == []
+    assert queue._m3_eligible(row)
+
+
+def test_other_repo_paths_do_not_refuse(queue, checkouts, tmp_path, monkeypatch):
+    """A job naming a checkout of another repo (Homebrew, a plugin) is not a source-tree mismatch."""
+    main, _ = checkouts
+    other = (tmp_path / "other").resolve()
+    other.mkdir()
+    _git(other, "init", "-q")
+    (other / "b.py").write_text("y = 2\n")
+    monkeypatch.chdir(main)
+    jid = queue.submit(["true", str(other / "b.py")], "other", 1, 0, device="any")
+    row = queue._read(queue.JOBS / (jid + ".json"))
+    assert row["m3_refused"] == []
