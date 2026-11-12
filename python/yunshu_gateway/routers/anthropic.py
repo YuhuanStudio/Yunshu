@@ -30,7 +30,7 @@ _TOOL_ARG_CHUNK = 4096  # input_json_delta frame size (the whole call is known; 
 import contextlib
 import os
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
@@ -270,6 +270,16 @@ class AnthropicMessagesRequest(BaseModel):
     logprobs: bool = False
     top_logprobs: int | None = Field(default=None, ge=0, le=20)
     logits_processors: list | None = None
+
+    @field_validator("logits_processors")
+    @classmethod
+    def _no_http_logits_processors(cls, v):
+        if v:
+            raise ValueError(
+                "cannot be sent over HTTP: processors are Python callables; omit it or send []"
+            )
+        return v
+
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: dict | None = None
     timeout: float | None = Field(

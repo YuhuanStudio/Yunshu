@@ -798,6 +798,16 @@ class ResponsesRequest(BaseModel):
     safety_identifier: str | None = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: list | None = None  # User-provided custom logits processors
+
+    @field_validator("logits_processors")
+    @classmethod
+    def _no_http_logits_processors(cls, v):
+        if v:
+            raise ValueError(
+                "cannot be sent over HTTP: processors are Python callables; omit it or send []"
+            )
+        return v
+
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds

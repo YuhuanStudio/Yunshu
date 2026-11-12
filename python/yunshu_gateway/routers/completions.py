@@ -229,6 +229,16 @@ class CompletionRequest(BaseModel):
     logits_processors: list | None = (
         None  # SAMP-2: User-provided custom logits processors
     )
+
+    @field_validator("logits_processors")
+    @classmethod
+    def _no_http_logits_processors(cls, v):
+        if v:
+            raise ValueError(
+                "cannot be sent over HTTP: processors are Python callables; omit it or send []"
+            )
+        return v
+
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds

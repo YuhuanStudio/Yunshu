@@ -484,6 +484,16 @@ class ChatCompletionRequest(BaseModel):
     guided_json: dict | None = None  # JSON schema
     lora_adapter: str | None = None  # LoRA adapter ID to apply for this request
     logits_processors: list | None = None  # User-provided custom logits processors
+
+    @field_validator("logits_processors")
+    @classmethod
+    def _no_http_logits_processors(cls, v):
+        if v:
+            raise ValueError(
+                "cannot be sent over HTTP: processors are Python callables; omit it or send []"
+            )
+        return v
+
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds

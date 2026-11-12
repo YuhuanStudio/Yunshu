@@ -1176,12 +1176,16 @@ class BatchedEngine(
         gemma4_eligible=None,
         external_eligible: bool = True,
         plain_only: bool = False,
+        logits_processors: list | None = None,
+        json_schema=None,
     ) -> str | None:
         # plain_only: the request sets min_tokens / ignore_eos, which only the plain fast
         # path honors; a spec route would drop them. suppress_tokens is not
         # one of them: the n-gram and Gemma-4 routes ban the ids themselves, and the opt-in
         # external-draft route excludes it in ``external_eligible``.
-        if logprobs or plain_only:
+        # The n-gram loop never applies request logits processors; the plain path does.
+        # Constrained requests install the constraint state machine only on the plain path.
+        if logprobs or plain_only or logits_processors or json_schema is not None:
             return None
         greedy = temperature is None or temperature <= 0.0
         if (
@@ -1307,6 +1311,8 @@ class BatchedEngine(
             # min_tokens / ignore_eos only the plain path honors; suppress_tokens (the request's
             # or the checkpoint's default) the n-gram and Gemma-4 routes apply themselves
             plain_only=bool(min_tokens or ignore_eos),
+            logits_processors=logits_processors,
+            json_schema=json_schema,
             # The external adapter does not implement the full fast-path
             # parameter contract. Never drop a client's requested behavior.
             external_eligible=(
@@ -1699,6 +1705,8 @@ class BatchedEngine(
             stream=True,
             temperature=temperature,
             logprobs=bool(logprobs),
+            logits_processors=logits_processors,
+            json_schema=json_schema,
         )
         spec_decode = _spec is not None
         # Resolve reasoning_effort → thinking_budget if not explicitly set
