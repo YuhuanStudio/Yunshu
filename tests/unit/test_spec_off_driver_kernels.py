@@ -27,9 +27,8 @@ def test_spec_off_driver_decodes_through_the_verify_forward_without_a_drafter():
     batch.can_draft = False
     batch.rows, batch.hidden = [], {}
     assert batch.absorb([], []) is None
-    src = inspect.getsource(
-        __import__(
-            "yunshu_engine.round_driver.driver", fromlist=["x"]
-        ).RoundDriver.__init__
-    )
+    # M1 C2 moved the drafter choice from RoundDriver.__init__ onto the layer's drafters()
+    from yunshu_engine.round_driver import layer
+
+    src = inspect.getsource(layer)
     assert "plain_verify and drafter is None" in src
