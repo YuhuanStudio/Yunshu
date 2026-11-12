@@ -19,7 +19,9 @@ _FIRST: dict[str, str] = {}
 def _detail_text(detail) -> str:
     try:
         return str(detail()) if callable(detail) else str(detail)
-    except Exception:  # a detail probe must never fail the inference call that hit the fallback
+    except (
+        Exception
+    ):  # a detail probe must never fail the inference call that hit the fallback
         return "<detail unavailable>"
 
 

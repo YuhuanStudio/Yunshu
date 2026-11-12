@@ -11,7 +11,7 @@ def test_runner_reads_the_layer_not_a_driver_flag():
 
     src = inspect.getsource(vlm_batch_runner)
     assert 'getattr(driver, "generic"' not in src
-    assert "isinstance(getattr(driver, \"layer\", None), GenericLayer)" in src
+    assert 'isinstance(getattr(driver, "layer", None), GenericLayer)' in src
 
 
 def test_generic_layer_rows_get_prompt_inputs_on_admit():

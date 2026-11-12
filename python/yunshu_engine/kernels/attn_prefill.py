@@ -189,8 +189,10 @@ def _note_skip(why: str, queries, keys, values) -> None:
 
     fallbacks.record(
         f"attn_prefill_{why.replace('-', '_')}",
-        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} values={tuple(values.shape)} "
-        f"dtype={queries.dtype} keys_dtype={keys.dtype}: stock SDPA",
+        lambda: (
+            f"queries={tuple(queries.shape)} keys={tuple(keys.shape)} values={tuple(values.shape)} "
+            f"dtype={queries.dtype} keys_dtype={keys.dtype}: stock SDPA"
+        ),
     )
 
 

@@ -12,7 +12,7 @@ pytest.importorskip("mlx_lm")
 
 import mlx.core as mx  # noqa: E402
 
-from .test_spec_routes_behaviour import N, PROMPT, _spec_engine  # noqa: E402
+from .test_spec_routes_behaviour import PROMPT, N, _spec_engine  # noqa: E402
 
 FORCED = 7  # decodes to chr(97 + 7) == "h" in the tiny tokenizer
 

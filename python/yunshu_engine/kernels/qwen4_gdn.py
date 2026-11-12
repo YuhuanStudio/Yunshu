@@ -151,7 +151,9 @@ def gated_delta(
 
         fallbacks.record(
             "qwen4_gdn_verify",
-            lambda: f"rows={length} cache={type(cache).__name__} lengths={getattr(cache, 'lengths', None) is not None}: composed layer",
+            lambda: (
+                f"rows={length} cache={type(cache).__name__} lengths={getattr(cache, 'lengths', None) is not None}: composed layer"
+            ),
         )
     if _STATE["fallback"] == 1:
         logger.info(

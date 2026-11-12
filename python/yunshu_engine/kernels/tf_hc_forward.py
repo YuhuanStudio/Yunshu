@@ -46,7 +46,9 @@ def _note_model_fallback(hidden: Any, model: Any) -> None:
 
     fallbacks.record(
         "tf_hc_forward_model",
-        lambda: f"hidden={hidden.dtype} layers={len(model.layers)}: upstream layer loop",
+        lambda: (
+            f"hidden={hidden.dtype} layers={len(model.layers)}: upstream layer loop"
+        ),
     )
 
 

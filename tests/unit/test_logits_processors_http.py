@@ -20,7 +20,12 @@ import pytest
     ],
 )
 def test_logits_processors_over_http_is_a_400_naming_the_field(client, path, body):
-    body = {"model": "m", "max_tokens": 4, "logits_processors": [{"type": "noop"}], **body}
+    body = {
+        "model": "m",
+        "max_tokens": 4,
+        "logits_processors": [{"type": "noop"}],
+        **body,
+    }
     r = client.post(path, json=body)
     assert r.status_code == 400
     err = r.json()["error"]

@@ -276,4 +276,6 @@ def test_mtp_block_size_doc_matches_flashnext_default():
     # Flash-Next (qwen4) MTP uses block 2 when unset (qwen4_mtp.configure_lane); the doc must say so.
     from yunshu_engine.settings import REGISTRY
 
-    assert "2 for Flash-Next (qwen4) MTP" in REGISTRY["YUNSHU_MTP_BLOCK_SIZE"].description
+    assert (
+        "2 for Flash-Next (qwen4) MTP" in REGISTRY["YUNSHU_MTP_BLOCK_SIZE"].description
+    )

@@ -140,7 +140,9 @@ def _note_miss(rows: int, k: int, n: int, bits: int, group_size: int) -> None:
 
     fallbacks.record(
         "batch_invariant_sg8",
-        lambda: f"rows={rows} K={k} N={n} bits={bits} group={group_size}: exact (non-invariant) qmm",
+        lambda: (
+            f"rows={rows} K={k} N={n} bits={bits} group={group_size}: exact (non-invariant) qmm"
+        ),
     )
 
 

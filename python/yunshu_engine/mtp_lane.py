@@ -78,7 +78,10 @@ def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
 
     rows = _verify_max_rows(lane_projections, language_model)
     if rows < 32:
-        fallbacks.record("verify_max_rows_narrow", f"verify window {rows} rows (lane not certified wider)")
+        fallbacks.record(
+            "verify_max_rows_narrow",
+            f"verify window {rows} rows (lane not certified wider)",
+        )
     return rows
 
 

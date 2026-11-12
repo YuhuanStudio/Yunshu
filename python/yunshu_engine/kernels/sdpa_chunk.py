@@ -103,7 +103,9 @@ def _note_head_dim(queries, keys, budget: int | None) -> None:
 
     fallbacks.record(
         "sdpa_chunk_head_dim",
-        lambda: f"queries={tuple(queries.shape)} keys={tuple(keys.shape)}: head dim not in {HEAD_DIMS}, unchunked SDPA",
+        lambda: (
+            f"queries={tuple(queries.shape)} keys={tuple(keys.shape)}: head dim not in {HEAD_DIMS}, unchunked SDPA"
+        ),
     )
 
 

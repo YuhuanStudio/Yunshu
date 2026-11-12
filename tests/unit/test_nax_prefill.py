@@ -340,6 +340,7 @@ def test_split_prefill_preserves_narrow_gate_launch_and_sum_reuse(monkeypatch, r
 def test_nax_lane_matmul_equals_stock_quantized_matmul(monkeypatch, bits):
     """2026-11-11: every lane bit width runs NAX bit-identically to MLX (2-bit is the Flash-Next base)."""
     import mlx.core as mx
+
     from yunshu_engine.kernels.tensorfold import lane_qmm
 
     monkeypatch.setattr(

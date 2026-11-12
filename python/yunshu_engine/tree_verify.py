@@ -1170,7 +1170,9 @@ def supported(language_model: Any) -> bool:
 
     ok = _supported(language_model)
     if not ok:
-        fallbacks.record("tree_verify_unsupported", "dense Qwen3.5 tree verify not available")
+        fallbacks.record(
+            "tree_verify_unsupported", "dense Qwen3.5 tree verify not available"
+        )
     return ok
 
 

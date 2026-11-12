@@ -423,7 +423,11 @@ class OmniEngine:
         )
 
     async def _iter_materialized(
-        self, conv: list[dict], spk: str, tmax: int, cancel: threading.Event | None = None
+        self,
+        conv: list[dict],
+        spk: str,
+        tmax: int,
+        cancel: threading.Event | None = None,
     ):
         """Yield (kind, cpu_data) with mx arrays materialized to CPU (str for text,
         numpy for audio). A reused model lives on the shared executor thread (which

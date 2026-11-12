@@ -34,15 +34,36 @@ MS = tuple(range(1, 17))
 
 # file (relative to python/yunshu_engine) -> (calls, why it is safe for identity)
 STOCK_CALLSITES: dict[str, tuple[int, str]] = {
-    "ane/ffn_split.py": (1, "ANE split FFN: lossy opt-in option, not the identity path"),
-    "dflash_draft.py": (1, "drafter projection: changes acceptance only, target verify decides tokens"),
+    "ane/ffn_split.py": (
+        1,
+        "ANE split FFN: lossy opt-in option, not the identity path",
+    ),
+    "dflash_draft.py": (
+        1,
+        "drafter projection: changes acceptance only, target verify decides tokens",
+    ),
     "draft_vocab.py": (1, "draft head readout: acceptance only"),
-    "kernels/int_code_linear.py": (1, "rows > lane MAX_ROWS (prefill) or one row outside the invariant lane"),
-    "blocks/linear.py": (2, "fallback outside the lane envelope; see lane_linear eligibility"),
-    "kernels/omlx/qwen35_gdn_prework.py": (1, "B1/T1 decode fused-projection fallback: M=1 only"),
-    "kernels/omlx_q4/qwen35_gdn_prework.py": (2, "B1/T1 decode fallback (M=1) and prefill-side fallback"),
+    "kernels/int_code_linear.py": (
+        1,
+        "rows > lane MAX_ROWS (prefill) or one row outside the invariant lane",
+    ),
+    "blocks/linear.py": (
+        2,
+        "fallback outside the lane envelope; see lane_linear eligibility",
+    ),
+    "kernels/omlx/qwen35_gdn_prework.py": (
+        1,
+        "B1/T1 decode fused-projection fallback: M=1 only",
+    ),
+    "kernels/omlx_q4/qwen35_gdn_prework.py": (
+        2,
+        "B1/T1 decode fallback (M=1) and prefill-side fallback",
+    ),
     "kernels/omlx_q4/row_exact_qmv.py": (1, "self-check reference: one-row stock call"),
-    "kernels/tensorfold/lane_qmm.py": (2, "self-check reference and rows > MAX_ROWS (128) fallback"),
+    "kernels/tensorfold/lane_qmm.py": (
+        2,
+        "self-check reference and rows > MAX_ROWS (128) fallback",
+    ),
 }
 
 
@@ -54,7 +75,9 @@ def _inventory() -> dict[str, int]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 fn = node.func
-                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                name = (
+                    fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                )
                 n += name == "quantized_matmul"
         if n:
             found[str(path.relative_to(ROOT / "python" / "yunshu_engine"))] = n
@@ -76,12 +99,16 @@ def _observe(mx, K: int, N: int, bits: int) -> dict[int, int]:
     wq, s, b = mx.quantize(w, group_size=64, bits=bits)
     x = mx.random.normal((16, K)).astype(mx.bfloat16)
     one = [
-        mx.quantized_matmul(x[r : r + 1], wq, s, b, transpose=True, group_size=64, bits=bits)
+        mx.quantized_matmul(
+            x[r : r + 1], wq, s, b, transpose=True, group_size=64, bits=bits
+        )
         for r in range(16)
     ]
     out: dict[int, int] = {}
     for m in MS:
-        y = mx.quantized_matmul(x[:m], wq, s, b, transpose=True, group_size=64, bits=bits)
+        y = mx.quantized_matmul(
+            x[:m], wq, s, b, transpose=True, group_size=64, bits=bits
+        )
         mx.eval(y, *one)
         out[m] = sum(int(mx.sum(y[r : r + 1] != one[r]).item()) for r in range(m))
     return out
@@ -107,10 +134,16 @@ def test_stock_qmm_rowinv_matches_golden() -> None:
     golden = json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
     if arch not in golden:
         # the golden is per architecture (M5: applegpu_g17s); another device has nothing to compare with
-        pytest.skip(f"no stock-qmm golden for {arch!r} (goldens exist for {sorted(golden)})")
+        pytest.skip(
+            f"no stock-qmm golden for {arch!r} (goldens exist for {sorted(golden)})"
+        )
     got = _table(mx)
     changed = {
-        key: {m: (golden[arch][key].get(m), got[key][m]) for m in got[key] if got[key][m] != golden[arch][key].get(m)}
+        key: {
+            m: (golden[arch][key].get(m), got[key][m])
+            for m in got[key]
+            if got[key][m] != golden[arch][key].get(m)
+        }
         for key in got
     }
     changed = {k: v for k, v in changed.items() if v}
@@ -126,5 +159,7 @@ if __name__ == "__main__" and "--write" in sys.argv:
     data = json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
     data[_arch(mx)] = _table(mx)
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-    GOLDEN.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    GOLDEN.write_text(
+        json.dumps(data, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print("wrote", GOLDEN, "arch", _arch(mx))

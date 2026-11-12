@@ -13,10 +13,12 @@ pytest.importorskip("mlx_lm")
 from yunshu_engine.grammar_constraint import ConstraintFactory  # noqa: E402
 
 from .test_reasoning_gate import SeqConstraint  # noqa: E402
-from .test_spec_routes_behaviour import N, PROMPT, _spec_engine  # noqa: E402
+from .test_spec_routes_behaviour import PROMPT, N, _spec_engine  # noqa: E402
 
 
-async def test_greedy_constrained_request_on_ngram_default_is_not_speculated(monkeypatch):
+async def test_greedy_constrained_request_on_ngram_default_is_not_speculated(
+    monkeypatch,
+):
     monkeypatch.setattr(
         ConstraintFactory, "create", staticmethod(lambda *a, **k: SeqConstraint())
     )

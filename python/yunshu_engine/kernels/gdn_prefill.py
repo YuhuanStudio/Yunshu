@@ -182,7 +182,8 @@ def install_norm_scale(cls) -> None:
             from .. import fallbacks
 
             fallbacks.record(
-                "gdn_norm_scale_head_dim", lambda: f"q={tuple(q.shape)}: stock _normalize_qk"
+                "gdn_norm_scale_head_dim",
+                lambda: f"q={tuple(q.shape)}: stock _normalize_qk",
             )
         return original(self, q, k)
 

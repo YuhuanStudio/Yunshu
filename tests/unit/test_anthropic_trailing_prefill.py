@@ -1,9 +1,10 @@
 """Anthropic Messages prefill: a trailing assistant text turn reaches the template as an open turn."""
 
-from yunshu_gateway.routers.anthropic import AnthropicMessage, _convert_anthropic_messages
-from yunshu_engine.batched_engine import BatchedEngine
-
-from tests.unit.test_assistant_prefill import _RecordingTokenizer, _engine
+from tests.unit.test_assistant_prefill import _engine, _RecordingTokenizer
+from yunshu_gateway.routers.anthropic import (
+    AnthropicMessage,
+    _convert_anthropic_messages,
+)
 
 
 def test_trailing_assistant_text_survives_conversion_and_continues():
