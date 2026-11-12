@@ -359,7 +359,13 @@ SUITES["long-gate"] = {
 
 # Thinking-mode MMLU-Pro 300 (the Flash-Next protocol behind MODEL_SUPPORT's 261/300): paired, greedy, long replies.
 # Teacher-forced KL divergence of base and candidate against a reference (docs/guides/VERIFY.md, "kld").
-SUITES["kld"] = {"stages": ["kld"], "ctx": [1024], "kld_ref_shards": 2}
+# kld_timeout_min 60: sgate-fn base cell (11-12) ran a 32K prefill under KLD capture ~426 s + 9 prompts and hit 25 min.
+SUITES["kld"] = {
+    "stages": ["kld"],
+    "ctx": [1024],
+    "kld_ref_shards": 2,
+    "kld_timeout_min": 60,
+}
 # The same verdict over the decode path: T=1 steps through the served decode kernels (decode-kernel changes).
 SUITES["kld-decode"] = {**SUITES["kld"], "stages": ["kld_decode"], "kld_decode": 128}
 
