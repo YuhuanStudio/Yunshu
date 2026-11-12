@@ -66,6 +66,16 @@ def code_doc(seed, approx_tokens):
     return "".join(lines)
 
 
+def turn1_document(tok, size):
+    """Turn-1 user text whose served prompt length is exactly ``size`` tokens (prompt_len.build_text)."""
+    return prompt_len.build_text(
+        tok,
+        code_doc(size, size * 6),
+        size,
+        suffix="\nList three functions that use 'cache'.",
+    )
+
+
 def metrics(url):
     out = {}
     try:
@@ -263,13 +273,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
             record(f"short{i}", u, s)
         tok = prompt_len.load_tokenizer(model)
         for size in SIZES:
-            # the size is the served turn-1 prompt length (prompt_len.py)
-            doc = prompt_len.build_text(
-                tok,
-                code_doc(size, size * 6),
-                size,
-                suffix="\nList three functions that use 'cache'.",
-            )
+            doc = turn1_document(tok, size)
             msgs = [{"role": "user", "content": doc}]
             out, u, s = chat(url, msgs, 128)
             prompt_len.check_served_length(size, u)

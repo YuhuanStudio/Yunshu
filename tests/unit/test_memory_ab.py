@@ -4,6 +4,8 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
@@ -14,6 +16,20 @@ def _load():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@pytest.mark.parametrize("size", [8192, 32768])
+def test_turn1_document_is_sized_in_tokens(size):
+    tokenizer_dir = pathlib.Path("/Volumes/P5Plus/models/Qwen2.5-7B-Instruct-4bit")
+    if not (tokenizer_dir / "tokenizer.json").exists():
+        pytest.skip("tokenizer checkpoint not on this machine")
+    m = _load()
+    import prompt_len
+
+    tok = prompt_len.load_tokenizer(tokenizer_dir)
+    doc = m.turn1_document(tok, size)
+    served = prompt_len.served_tokens(tok, doc)
+    assert abs(served - size) <= 0.02 * size
 
 
 def test_code_doc_is_deterministic_and_sized():
