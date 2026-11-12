@@ -35,6 +35,7 @@ from yunshu_engine import settings
 from yunshu_engine.output_limits import (
     MAX_THINKING_BUDGET,
     SOURCE_REQUEST,
+    check_effort,
     default_max_output,
     default_source,
     fold_effort,
@@ -42,6 +43,7 @@ from yunshu_engine.output_limits import (
 
 from ..engine import get_engine, get_engine_for_model
 from ..error_envelope import EngineStreamError, server_error_body
+from ..memory_refusal import openai_prompt_too_long
 from ..usage_shapes import responses_usage
 
 logger = logging.getLogger(__name__)
@@ -741,6 +743,11 @@ class ResponsesRequest(BaseModel):
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     stop: list[str] | None = None
 
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _effort_in_vocabulary(cls, v):
+        return check_effort(v)
+
     @field_validator("stop", mode="before")
     @classmethod
     def _stop_str_to_list(cls, v):
@@ -871,7 +878,7 @@ class ResponsesRequest(BaseModel):
         if self.reasoning_effort is None and isinstance(self.reasoning, dict):
             _eff = self.reasoning.get("effort")
             if isinstance(_eff, str) and _eff:
-                object.__setattr__(self, "reasoning_effort", _eff)
+                object.__setattr__(self, "reasoning_effort", check_effort(_eff))
         # OpenAI ReasoningEffort "none" / "minimal": no reasoning
         _et, _ef = fold_effort(self.enable_thinking, self.reasoning_effort)
         object.__setattr__(self, "enable_thinking", _et)
@@ -2591,7 +2598,10 @@ async def create_response(req: ResponsesRequest, request: Request):
         return JSONResponse(_response_payload)
     except HTTPException:
         raise  # let the disconnect (499) propagate, not become a 500
-    except MemoryError:
+    except MemoryError as mem_exc:
+        prompt_body = openai_prompt_too_long(mem_exc)
+        if prompt_body is not None:
+            return JSONResponse(status_code=400, content=prompt_body)
         return JSONResponse(
             status_code=507,
             content={
@@ -3500,7 +3510,7 @@ async def _stream_response(
             ),
         ):
             yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
-    except MemoryError:
+    except MemoryError as mem_exc:
         if _cancel_evt is not None:
             _cancel_evt.set()
         # Emit initial lifecycle events if they were never sent (error before
@@ -3581,11 +3591,16 @@ async def _stream_response(
                 output_index=_msg_idx,
                 seq=_next_seq(),
             ).encode("utf-8")
+        prompt_body = openai_prompt_too_long(mem_exc)
         yield format_responses_failed(
             response_id,
             req.model,
-            error_code="server_error",
-            error_message="Insufficient GPU memory",
+            error_code="context_length_exceeded" if prompt_body else "server_error",
+            error_message=(
+                prompt_body["error"]["message"]
+                if prompt_body
+                else "Insufficient GPU memory"
+            ),
             input_tokens=prompt_tok,
             output_tokens=completion_tok,
             total_tokens=prompt_tok + completion_tok,

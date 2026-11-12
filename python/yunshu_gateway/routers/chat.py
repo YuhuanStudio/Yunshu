@@ -32,6 +32,7 @@ from yunshu_engine import settings
 from yunshu_engine.output_limits import (
     MAX_THINKING_BUDGET,
     SOURCE_REQUEST,
+    check_effort,
     default_max_output,
     default_source,
     fold_effort,
@@ -42,6 +43,7 @@ from yunshu_engine.tool_format import parse_tool_output, tool_formats
 from ..continuous_usage import update_usage, with_continuous_usage
 from ..engine import get_engine, get_model_manager
 from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
+from ..memory_refusal import openai_prompt_too_long
 from ..streaming import (
     ClosingStreamingResponse,
     extract_thinking,
@@ -502,6 +504,11 @@ class ChatCompletionRequest(BaseModel):
     # recognized key into the top-level field so it isn't silently ignored.
     chat_template_kwargs: dict | None = None
 
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _effort_in_vocabulary(cls, v):
+        return check_effort(v)
+
     @model_validator(mode="before")
     @classmethod
     def _null_means_unset(cls, data):
@@ -525,7 +532,7 @@ class ChatCompletionRequest(BaseModel):
         ):
             _eff = self.chat_template_kwargs.get("reasoning_effort")
             if isinstance(_eff, str) and _eff:
-                self.reasoning_effort = _eff
+                self.reasoning_effort = check_effort(_eff)
         # OpenAI ReasoningEffort "none" / "minimal": no reasoning
         self.enable_thinking, self.reasoning_effort = fold_effort(
             self.enable_thinking, self.reasoning_effort
@@ -2329,6 +2336,9 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
                         req.top_logprobs,
                     )
             except MemoryError as mem_exc:
+                prompt_body = openai_prompt_too_long(mem_exc)
+                if prompt_body is not None:
+                    return JSONResponse(status_code=400, content=prompt_body)
                 return JSONResponse(
                     status_code=507,
                     content={
@@ -2758,8 +2768,14 @@ async def _handle_vlm_chat(
             }
             r = await vlm_engine.generate(**kwargs)
         except MemoryError as mem_exc:
-            from yunshu_engine.memory_admission import MemoryAdmissionError
+            from yunshu_engine.memory_admission import (
+                MemoryAdmissionError,
+                PromptTooLongError,
+                refusal_text,
+            )
 
+            if isinstance(mem_exc, PromptTooLongError):
+                return idx, None, refusal_text(mem_exc)
             if isinstance(mem_exc, MemoryAdmissionError):
                 return idx, None, f"memory_limit: {mem_exc}"
             return idx, None, "memory_error"
@@ -2875,6 +2891,13 @@ async def _handle_vlm_chat(
 
     # Check for errors
     for _idx, _data, err in results:
+        if err is not None and err.startswith("[prompt_too_long] "):
+            from yunshu_engine.memory_admission import memory_limit_error
+
+            return JSONResponse(
+                status_code=400,
+                content=openai_prompt_too_long(memory_limit_error(err)),
+            )
         if err is not None and err.startswith("memory_limit: "):
             return JSONResponse(
                 status_code=507,
@@ -3489,7 +3512,8 @@ async def _stream_vlm_response(
         yield (
             "data: "
             + json.dumps(
-                {
+                openai_prompt_too_long(mem_exc)
+                or {
                     "error": {
                         "message": _memory_error_message(mem_exc),
                         "type": "memory_error",

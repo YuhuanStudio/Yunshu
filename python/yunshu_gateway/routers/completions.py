@@ -8,6 +8,7 @@ Supports:
 - Logprobs
 - Echo mode
 """
+import json
 import logging
 import time
 import types
@@ -23,6 +24,7 @@ from yunshu_engine.output_limits import (
     MAX_THINKING_BUDGET,
     SOURCE_REQUEST,
     SOURCE_SPEC_DEFAULT,
+    check_effort,
     fold_effort,
 )
 from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
@@ -30,6 +32,7 @@ from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 from ..continuous_usage import update_usage, with_continuous_usage
 from ..engine import get_engine, get_engine_for_model
 from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
+from ..memory_refusal import openai_prompt_too_long
 from ..usage_shapes import openai_usage
 from .chat import (
     _apply_lora_adapter,
@@ -250,6 +253,11 @@ class CompletionRequest(BaseModel):
             if self.max_completion_tokens is not None
             else self.max_tokens
         )
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _effort_in_vocabulary(cls, v):
+        return check_effort(v)
 
     @field_validator("stop", mode="before")
     @classmethod
@@ -1051,7 +1059,10 @@ async def create_completion(req: CompletionRequest, request: Request):
                 "usage": usage,
             }
         )
-    except MemoryError:
+    except MemoryError as mem_exc:
+        prompt_body = openai_prompt_too_long(mem_exc)
+        if prompt_body is not None:
+            return JSONResponse(status_code=400, content=prompt_body)
         return JSONResponse(
             status_code=507,
             content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
@@ -1514,7 +1525,7 @@ async def _stream_completion(
             _sse_buffer += "\n\n"
             for chunk in _drain_sse_buffer():
                 yield chunk
-    except MemoryError:
+    except MemoryError as mem_exc:
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
         # Flush any buffered partial data before error
@@ -1522,7 +1533,20 @@ async def _stream_completion(
             _sse_buffer += "\n\n"
             for chunk in _drain_sse_buffer():
                 yield chunk
-        yield b'data: {"error": {"message": "Insufficient GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
+        yield (
+            "data: "
+            + json.dumps(
+                openai_prompt_too_long(mem_exc)
+                or {
+                    "error": {
+                        "message": "Insufficient GPU memory",
+                        "type": "memory_error",
+                        "code": "oom",
+                    }
+                }
+            )
+            + "\n\n"
+        ).encode()
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:

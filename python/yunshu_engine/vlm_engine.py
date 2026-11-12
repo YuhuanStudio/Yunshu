@@ -49,9 +49,9 @@ import mlx.core as mx
 from . import gc_policy, netguard, next_turn, settings
 from .engine_templates import EngineTemplatesMixin
 from .memory_admission import (
-    MEMORY_LIMIT_MARK,
     MemoryAdmissionError,
     memory_limit_error,
+    refusal_text,
 )
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .paths import private_media_dir
@@ -62,11 +62,6 @@ from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
 
-# Prompt tokens per round-driver prefill atom: a decoding row only steps between prefill
-# forwards, so small atoms keep it running next to a long prompt (Qwen3.8-27B, M5 Max:
-# 512 -> 6 tok/s, 128 -> 24 tok/s for one MTP row beside an 8K prompt, ~20% less prefill
-# speed). The atom grid is fixed per prompt, so output never depends on what else runs.
-ROUND_PREFILL_CHUNK = 512
 
 # Per-request temp-file registry. Set to a fresh list at the start of each
 # generate()/generate_stream() call so cleanup deletes EXACTLY the files THIS request
@@ -514,6 +509,16 @@ def _config_has_audio(config: dict) -> bool:
         )
 
     return has(config) or has(config.get("thinker_config"))
+
+
+def _round_prefill_chunk() -> int:
+    """Prompt tokens per round-driver prefill atom (one definition: round_driver/driver.py CHUNK).
+    A decoding row only steps between prefill forwards, so small atoms keep it running beside a
+    long prompt (Qwen3.8-27B, M5 Max: 512 -> 6 tok/s, 128 -> 24 tok/s for one MTP row beside an
+    8K prompt). The atom grid is fixed per prompt, so output never depends on what else runs."""
+    from .round_driver.driver import CHUNK
+
+    return CHUNK
 
 
 class VLMEngine:
@@ -2932,7 +2937,7 @@ class VLMEngine:
                 # checkpoints sit on (apc_prefill_stride), so a hit runs the spans a cold prompt did
                 chunk=int(settings.get("YUNSHU_QWEN4_PREFILL_STEP"))
                 if qwen4
-                else ROUND_PREFILL_CHUNK,
+                else _round_prefill_chunk(),
                 apc=self._apc_backend,
                 kv_format="bf16" if qwen4 else precision,
                 # Flash-Next drafts block - 1 tokens per round (default block 2: qwen4_mtp.configure_lane)
@@ -3794,7 +3799,7 @@ class VLMEngine:
                     finish_reason="error",
                     finished=True,
                     error=(
-                        MEMORY_LIMIT_MARK + str(exc)
+                        refusal_text(exc)
                         if isinstance(exc, MemoryAdmissionError)
                         else str(exc)
                     ),

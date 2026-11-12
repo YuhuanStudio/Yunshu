@@ -4024,6 +4024,13 @@
       ],
       "reviewed_date": "2026-10-15",
       "reason": "The mlx 0.32.3 wheel requires matching mlx-metal==0.32.3. Core 0.32.4 is rejected by the isolated sync016 FP32 SSD APC token-identity regression; do not mix native core/Metal versions."
+    },
+    "mlx-audio": {
+      "installed_version": "0.6.4",
+      "latest_version": "0.6.5",
+      "blocked_by": [],
+      "reviewed_date": "2026-11-12",
+      "reason": "Post-release dependency review (recorded only, no upgrade in this batch): PyPI 0.6.5 is out; pyproject floor stays mlx-audio>=0.6.4. Upgrade in a deps commit when no gpuq job uses the main .venv, with the ASR/TTS smoke. Upstream repo moved to Neywa-Labs (lead/upstream_sync_1111.md); vendor.json watch URLs still point at Blaizzy/mlx-audio, which GitHub redirects."
     }
   }
 }

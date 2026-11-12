@@ -32,6 +32,7 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from yunshu_engine.output_limits import check_effort
 from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
@@ -45,6 +46,7 @@ from ..anthropic_context_edit import (
 from ..anthropic_context_edit import validate as validate_edits
 from ..engine import get_engine
 from ..error_envelope import EngineStreamError
+from ..memory_refusal import anthropic_prompt_too_long
 from ..responses_context import ContextError
 from ..streaming import (
     ClosingStreamingResponse,
@@ -288,6 +290,11 @@ class AnthropicMessagesRequest(BaseModel):
     grammar: dict | None = None  # Grammar constraint (regex, choice, CFG)
     stream_options: dict | None = None  # Anthropic stream_options (include_usage)
 
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _effort_in_vocabulary(cls, v):
+        return check_effort(v)
+
     @model_validator(mode="before")
     @classmethod
     def _null_means_unset(cls, data):
@@ -299,6 +306,8 @@ class AnthropicMessagesRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        if self.output_config and self.output_config.get("effort") is not None:
+            check_effort(str(self.output_config["effort"]))
         if not self.messages:
             raise ValueError("messages: field is required and cannot be empty")
         if self.stop_sequences and len(self.stop_sequences) > 16:
@@ -2448,7 +2457,10 @@ async def _non_stream_batched(
             result = await _chat_coro
     except HTTPException:
         raise  # let the disconnect (499) propagate, not become a 500
-    except MemoryError:
+    except MemoryError as mem_exc:
+        prompt_body = anthropic_prompt_too_long(mem_exc)
+        if prompt_body is not None:
+            return JSONResponse(status_code=400, content=prompt_body)
         return JSONResponse(
             status_code=507,
             content={
@@ -2706,7 +2718,10 @@ async def _non_stream_legacy(
             result = await _gen_coro
     except HTTPException:
         raise  # let the disconnect (499) propagate, not become a 500
-    except MemoryError:
+    except MemoryError as mem_exc:
+        prompt_body = anthropic_prompt_too_long(mem_exc)
+        if prompt_body is not None:
+            return JSONResponse(status_code=400, content=prompt_body)
         return JSONResponse(
             status_code=507,
             content={
@@ -3661,7 +3676,11 @@ async def _stream_anthropic(
 
         # Only emit message_stop on normal completion, NOT after errors
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode()
-    except MemoryError:
+    except MemoryError as mem_exc:
+        prompt_body = anthropic_prompt_too_long(mem_exc)
+        if prompt_body is not None:
+            yield f"event: error\ndata: {json.dumps(prompt_body)}\n\n".encode()
+            return
         # Emit message_start if it was never sent (error before first engine output)
         if not _message_start_emitted:
             _message_start_emitted = True

@@ -1,0 +1,9 @@
+# Changed python/ modules that yv preflight may pass without a related unit test (HARN 313).
+# One entry per line: path, two spaces, "#", reason. An entry without a reason fails the gate.
+python/yunshu_engine/_vendor/deepseek_v4/encoding.py  # vendored DeepSeek V4 encoder; exercised via yunshu_engine.deepseek_v4_chat (tests/unit/test_deepseek_v4_chat.py)
+python/yunshu_engine/ane/ffn_split.py  # covered by tests/unit/test_ane_ffn_split_setting.py (the mapper matches test names by stem only)
+python/yunshu_engine/ane/ffn_kernels.py  # ANE kernel path: runs only on the Apple Neural Engine; checked by the M5 scripts/research/anenative_* smokes
+python/yunshu_engine/ane/ffn_startup.py  # ANE startup calibration: runs only on the Apple Neural Engine; checked by the M5 anenative smokes
+python/yunshu_engine/kernels/omlx/qwen35_verify_linear.py  # vendored oMLX Metal verify kernel; checked by the Qwen3.5 MTP identity gate on M5 (Metal only)
+python/yunshu_gateway/middleware/body_replay.py  # named in tests/unit/test_asgi_stack.py (body replay without Content-Length)
+python/yunshu_gateway/schemas/nulls.py  # explicit-null handling is behavioral: tests/unit/test_request_leniency.py

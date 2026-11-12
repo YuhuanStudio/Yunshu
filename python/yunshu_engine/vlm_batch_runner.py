@@ -1677,9 +1677,14 @@ class VLMBatchRunner:
             logger.debug("memory gate failed; admitting", exc_info=True)
             return False
         if decision.refuse:
-            from .memory_admission import MemoryAdmissionError
+            from .memory_admission import MemoryAdmissionError, PromptTooLongError
 
             logger.warning("Memory admission: request refused (%s)", decision.detail)
+            n = len(job.ids)
+            if decision.limit_bytes is not None:
+                fits = gate.max_prompt_tokens(n, job.max_tokens, decision.limit_bytes)
+                if fits < n:
+                    raise PromptTooLongError(n, fits, decision.detail)
             raise MemoryAdmissionError(decision.detail)
         if decision.admit:
             if job.mem_held_at:

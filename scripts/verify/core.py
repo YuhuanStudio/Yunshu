@@ -271,6 +271,46 @@ def related_tests(files: list[str], tree: Path) -> list[str]:
     return sorted(found)
 
 
+# Changed python/ modules that may lack a unit test: "path  # reason" per line (row HARN 313).
+PREFLIGHT_ALLOWLIST = "scripts/verify/preflight_allowlist.txt"
+
+
+def load_preflight_allowlist(tree: Path) -> dict[str, str]:
+    """path -> reason. An entry without a path or a reason is an error (the gate fails closed)."""
+    p = tree / PREFLIGHT_ALLOWLIST
+    if not p.exists():
+        return {}
+    out: dict[str, str] = {}
+    for n, raw in enumerate(p.read_text().splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        path, _, reason = line.partition("#")
+        path, reason = path.strip(), reason.strip()
+        if not path or not reason:
+            raise ValueError(
+                f"{PREFLIGHT_ALLOWLIST}:{n}: entry needs a path and a '# reason'"
+            )
+        out[path] = reason
+    return out
+
+
+def unmapped_python_files(
+    files: list[str], tree: Path, allowlist: dict[str, str] | None = None
+) -> list[str]:
+    """Changed python/ modules that no unit test maps to and that are not allowlisted."""
+    allow = allowlist or {}
+    bad = []
+    for f in files:
+        if not (f.startswith("python/") and f.endswith(".py")):
+            continue
+        if f in allow or not (tree / f).exists() or Path(f).name == "__init__.py":
+            continue  # a package marker has no logic to test
+        if not related_tests([f], tree):
+            bad.append(f)
+    return sorted(bad)
+
+
 # ── run directory ────────────────────────────────────────────────────────
 class RunDir:
     """Evidence of one verification: <stage>.jsonl per stage + state.json + cells/ files."""

@@ -37,12 +37,15 @@ patch release collects them.
 
 ### Added
 
+- `/v1/yunshu/status` and `/v1/yunshu/requests/recent` report `dropped`: finished-request rows pushed out of the full 512-row console ring (the oldest row goes first).
 - Opt-in draft-LM (`YUNSHU_DRAFT_MODEL`) and Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) drafters on the round driver's generic layer.
 - Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`) and a GitHub pre-release.
 - Benchmark harnesses label a context length by the served turn-1 prompt tokens (template included) and fail a cell whose served length is off.
 
 ### Changed
 
+- A prompt too long for the memory budget answers the spec's context overflow: OpenAI routes 400 `context_length_exceeded`, Anthropic 400 `prompt is too long: N tokens > M maximum`, with `error.yunshu` carrying `reason: memory_limit` and `fits_tokens`. Agent clients auto-compact on it. Other memory refusals keep 507.
+- `reasoning_effort` outside the OpenAI / Anthropic vocabulary (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) is a 400 that lists the accepted values, on chat, responses, completions and messages. `output_config.effort` is checked the same way.
 - Seeded sampling uses the keyed sampler (`keyed_sampling.py`, noise hashed from seed, position and token id), so a seeded run does not reproduce `mlx_lm` `make_sampler` streams.
 - Prompt-length checks on `/v1/chat/completions`, `/v1/messages` and `/v1/responses` count tokens on a worker thread with a per-text memo, so a long prompt (or a multi-turn history) no longer stalls other streams on the event loop. Status codes and counts are unchanged.
 - Generic-layer models decode each concurrent row with its own call, so concurrent output equals solo output; the lockstep batched path is removed.

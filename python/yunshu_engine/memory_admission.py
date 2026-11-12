@@ -309,6 +309,7 @@ def plan_load(
 
 # ---------------------------------------------------------------- admission gate
 MEMORY_LIMIT_MARK = "[memory_limit] "
+PROMPT_TOO_LONG_MARK = "[prompt_too_long] "
 
 
 def memory_limit_error(text: str) -> MemoryError | None:
@@ -316,12 +317,33 @@ def memory_limit_error(text: str) -> MemoryError | None:
     reports failures as text through its output queue)."""
     if text.startswith(MEMORY_LIMIT_MARK):
         return MemoryAdmissionError(text[len(MEMORY_LIMIT_MARK) :])
+    if text.startswith(PROMPT_TOO_LONG_MARK):
+        parts = text[len(PROMPT_TOO_LONG_MARK) :].split(" ", 2)
+        n, m = int(parts[0]), int(parts[1])
+        return PromptTooLongError(n, m, parts[2] if len(parts) > 2 else "")
     return None
+
+
+def refusal_text(exc: BaseException) -> str:
+    """The engine error string for an admission refusal (``memory_limit_error`` reads it back)."""
+    if isinstance(exc, PromptTooLongError):
+        return f"{PROMPT_TOO_LONG_MARK}{exc.prompt_tokens} {exc.fits_tokens} {exc}"
+    return MEMORY_LIMIT_MARK + str(exc)
 
 
 class MemoryAdmissionError(MemoryError):
     """A request that cannot fit even on an idle server (it would run the process out of
     Metal memory and take every running request with it): refused with the numbers."""
+
+
+class PromptTooLongError(MemoryAdmissionError):
+    """The prompt alone does not fit: ``fits_tokens`` is the longest prompt that would, with the
+    same max_tokens. Clients see this as the spec's context overflow, not a memory error."""
+
+    def __init__(self, prompt_tokens: int, fits_tokens: int, detail: str = "") -> None:
+        super().__init__(detail or f"prompt of {prompt_tokens} tokens does not fit")
+        self.prompt_tokens = prompt_tokens
+        self.fits_tokens = fits_tokens
 
 
 @dataclass(frozen=True)
@@ -330,6 +352,7 @@ class Decision:
     reason: str | None = None  # "memory" when held, "memory_limit" when refused
     detail: str = ""
     refuse: bool = False
+    limit_bytes: int | None = None  # the free ceiling a refusal was measured against
 
 
 class MemoryGate:
@@ -407,6 +430,22 @@ class MemoryGate:
             limits.append(cap)
         return min(limits) if limits else None
 
+    def max_prompt_tokens(
+        self, prompt_tokens: int, max_tokens: int, limit_bytes: int
+    ) -> int:
+        """The longest prompt below ``prompt_tokens`` whose estimate fits ``limit_bytes`` at this
+        max_tokens (the estimate grows with the prompt, so a binary search finds it)."""
+        lo, hi = 0, max(0, prompt_tokens - 1)
+        if self.estimate(0, max_tokens) > limit_bytes:
+            return 0
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self.estimate(mid, max_tokens) <= limit_bytes:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
     def decide(self, estimate: int, committed: int, any_active: bool) -> Decision:
         """Admit the request or hold it. ``committed`` is the not-yet-materialized part of the
         requests already running (their KV will still grow into the headroom)."""
@@ -422,6 +461,7 @@ class MemoryGate:
                 "of the Metal working set is free after the weights; shorten the prompt "
                 "or max_tokens",
                 refuse=True,
+                limit_bytes=hard,
             )
         if avail is None or (not any_active):
             self.last = {"available": avail, "estimate": estimate, "idle_admit": True}

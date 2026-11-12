@@ -154,6 +154,16 @@ def ns(w, **kw):
     return argparse.Namespace(**d)
 
 
+@pytest.fixture(autouse=True)
+def _round_golden_receipt_stub(monkeypatch):
+    """round-golden runs the real tiny receipt script (a GPU job); the fake world stubs it."""
+    monkeypatch.setitem(
+        stages.STAGE_FUNCS,
+        "round-golden",
+        lambda ctx: stages.StageResult("round-golden", True, [], {}),
+    )
+
+
 def go(w, **kw):
     return runner.run_ab(
         ns(w, **kw), gq=w.gq, log=lambda m: None, runs=w.runs, trees=w.trees
@@ -642,8 +652,8 @@ def test_tiny_suite_passes_base_equals_cand(world):
     assert go(world) == 0
     v, rd = verdict_of(world)
     assert v["overall"] == "PASS" and v["exit_code"] == 0
-    # preflight, smoke, identity, apc, speed, memory (no MMLU quality per change, 2026-11-10)
-    assert [s["status"] for s in v["stages"]] == ["PASS"] * 6
+    # round-golden (tiny receipt), preflight, smoke, identity, apc, speed, memory (no MMLU quality per change)
+    assert [s["status"] for s in v["stages"]] == ["PASS"] * 7
     for key in (
         "schema",
         "label",

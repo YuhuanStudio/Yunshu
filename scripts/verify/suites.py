@@ -333,7 +333,9 @@ SUITES = {
         # no kld: its capture hooks know only the Qwen3.5 / Flash-Next families and it reads the fixed
         # corpus on P5Plus, so a small model (or the unit tests' fake world) fails it closed
         # no quality: counted-question MMLU is release-only (user 10-28/10-30), tiny runs per change
-        "stages": [s for s in LADDER if s not in ("kld", "quality")],
+        # round-golden (HARN 312): the tiny receipt only; the checkpoint receipt is a release cost
+        "stages": [s for s in LADDER if s not in ("kld", "quality")] + ["round-golden"],
+        "round_golden_tiny_only": True,
         "ctx": [1024],
         "spec_off": False,
         "reps": 3,
@@ -350,7 +352,8 @@ SUITES["long-speed"] = {**SUITES["long"], "stages": ["speed"]}
 # turn-2 drift a release documents is excused and printed.
 SUITES["long-gate"] = {
     **SUITES["long"],
-    "stages": ["preflight", "identity", "apc"],
+    # conc (HARN 311): the long gate only; per-change suites stay free of the 32K concurrent cells
+    "stages": ["preflight", "identity", "apc", "conc"],
     "followup_drift_ok": True,
 }
 

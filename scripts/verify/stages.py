@@ -18,6 +18,7 @@ from pathlib import Path
 from . import analyze
 from . import probe as probe_mod
 from .core import (
+    PREFLIGHT_ALLOWLIST,
     REPO,
     VENV_PY,
     Arm,
@@ -25,8 +26,10 @@ from .core import (
     RunDir,
     changed_files,
     checkpoint_identity,
+    load_preflight_allowlist,
     read_jsonl,
     related_tests,
+    unmapped_python_files,
 )
 from .core import sha as _sha
 from .execute import Cell, Executor
@@ -488,6 +491,18 @@ def stage_preflight(ctx: Ctx) -> StageResult:
                 f"related unit tests failed (rc {rc}, {len(still)} still failing after isolated rerun): "
                 + "; ".join(f"FAILED {t}" for t in still)
             )
+    try:
+        allow = load_preflight_allowlist(ctx.cand.path)
+    except ValueError as e:
+        allow = {}
+        reasons.append(str(e))
+    unmapped = unmapped_python_files(changed, ctx.cand.path, allow)
+    numbers["unmapped_python"] = unmapped
+    if unmapped:
+        reasons.append(
+            "changed python modules with no related unit test (add one, or allowlist with a "
+            f"reason in {PREFLIGHT_ALLOWLIST}): " + ", ".join(unmapped)
+        )
     elif not tests and any(f.endswith(".py") for f in changed):
         numbers["note"] = "no related unit tests found for the changed python files"
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
@@ -3269,7 +3284,9 @@ def stage_round_golden(ctx: Ctx) -> StageResult:
     results = {}
     for kind in ("tiny", "checkpoint"):
         if (
-            layer == "generic" or ctx.env.get("M0_TINY_ONLY") == "1"
+            layer == "generic"
+            or ctx.env.get("M0_TINY_ONLY") == "1"
+            or (getattr(ctx, "suite", None) or {}).get("round_golden_tiny_only")
         ) and kind == "checkpoint":
             continue
         cmd = [

@@ -57,6 +57,24 @@ MAX_THINKING_BUDGET = MODEL_MAX_OUTPUT_TOKENS
 THINKING_OFF_EFFORTS = frozenset({"none", "minimal"})
 
 
+# OpenAI ReasoningEffort (none, minimal, low, medium, high, xhigh) and Anthropic output_config.effort
+# (low, medium, high, xhigh, max): the spec values. "max" is the one level only Anthropic names.
+ACCEPTED_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def check_effort(effort: str | None) -> str | None:
+    """Lower-cased ``reasoning_effort``; a value outside ``ACCEPTED_EFFORTS`` is a 400."""
+    if effort is None:
+        return None
+    e = str(effort).strip().lower()
+    if e not in ACCEPTED_EFFORTS:
+        raise ValueError(
+            f"{effort!r} is not a supported reasoning_effort; accepted values: "
+            + ", ".join(ACCEPTED_EFFORTS)
+        )
+    return e
+
+
 def fold_effort(
     enable_thinking: bool | None, effort: str | None
 ) -> tuple[bool | None, str | None]:

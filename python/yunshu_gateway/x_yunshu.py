@@ -233,6 +233,7 @@ class _Registry:
         self._seq = 0
         self._active: dict[str, RequestInfo] = {}
         self._recent: collections.deque[dict] = collections.deque(maxlen=512)
+        self._dropped = 0  # finished rows pushed out of the full ring (oldest first)
         self._listeners: list[Callable[[], None]] = []
 
     def add_listener(self, fn: Callable[[], None]) -> None:
@@ -276,8 +277,16 @@ class _Registry:
         with self._lock:
             self._seq += 1
             entry["seq"] = self._seq
+            if len(self._recent) == self._recent.maxlen:
+                self._recent.popleft()  # the oldest row goes; the newest is always kept
+                self._dropped += 1
             self._recent.append(entry)
         self._notify()
+
+    @property
+    def dropped(self) -> int:
+        with self._lock:
+            return self._dropped
 
     @property
     def latest_seq(self) -> int:

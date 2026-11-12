@@ -251,6 +251,7 @@ async def status(request: Request) -> dict:
             "prefill": phases.get("prefill", 0),
             "decode": phases.get("decode", 0),
             "items": reqs,
+            "finished_dropped": registry.dropped,
         },
         "last": registry.last(),
         "orphans": _orphans(),
@@ -288,6 +289,8 @@ async def recent_requests(
         "data": rows,
         "count": len(rows),
         "capacity": 512,
+        # Finished rows pushed out of the full ring since start (oldest dropped first).
+        "dropped": registry.dropped,
         # The cursor: a reader keeps ``latest_seq`` and asks for ``after_seq`` next time;
         # a changed ``boot_id`` means the engine restarted and the sequence started over.
         "boot_id": BOOT_ID,
