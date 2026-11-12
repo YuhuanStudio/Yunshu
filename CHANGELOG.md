@@ -56,6 +56,11 @@ patch release collects them.
 - Idle memory: a heartbeat that fired just before the idle trim could re-wire GPU memory after the trim had released it. The trim now ends the heartbeat window.
 - mlx 0.32.4 quantized matvec summed in a promoted float type and mlx-vlm 0.7.12 changed the q/k-norm epsilon; both are corrected in-house so speculation on and off stay identical.
 - `/v1/completions` on VLM models: a string prompt was wrapped in the chat template as a user turn (28 extra tokens on Qwen2.5). It is now raw text on every engine, as the text models already were; chat and Messages keep the template.
+- A `generation_config.json` with `do_sample: false` now means greedy decoding (temperature 0), as in HF transformers, instead of the API sampling default 1.0; an explicit request `temperature` still wins.
+- The `YUNSHU_MTP_BLOCK_SIZE` description (and `docs/CONFIGURATION.md`) now says the unset default is 2 for Flash-Next MTP, which is what the engine uses; it said 6.
+- Responses streaming during a long prefill sends a real `response.in_progress` event every 4 s (with the next `sequence_number`) instead of only a `: keep-alive` comment, so clients whose idle timer ignores comments keep waiting (OpenAI Responses streaming reference: `response.in_progress`).
+- Omni speech stream: a client disconnect now stops the Thinker/Talker generation before its next step; it used to run the whole turn on the GPU.
+- Silent-fallback gates (tree verify, DFlash 27B lane, MTP verify window, APC capacity) now count their misses in `/monitoring/kernel-fallbacks`, as the fused kernels already did.
 
 ### Security
 

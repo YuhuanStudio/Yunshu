@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import urllib.request
 from contextlib import suppress
 from urllib.parse import urlparse
@@ -257,6 +258,8 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
             status_code=400, detail=f"could not load input media: {e}"
         ) from e
 
+    cancel = threading.Event()
+
     async def sse():
         try:
             async for ch in eng.stream(
@@ -265,6 +268,7 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
                 audio_path=audio_path,
                 speaker=req.speaker,
                 thinker_max_new_tokens=req.thinker_max_new_tokens,
+                cancel=cancel,
             ):
                 if ch.kind == "text":
                     yield _sse({"type": "text", "delta": ch.data})
@@ -283,6 +287,8 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
             logger.exception("omni speech stream failed")
             yield _sse({"type": "error", "message": str(e)})
         finally:
+            # a client disconnect closes this generator: stop the GPU work too
+            cancel.set()
             _cleanup_media(_tmp)
 
     return StreamingResponse(sse(), media_type="text/event-stream")

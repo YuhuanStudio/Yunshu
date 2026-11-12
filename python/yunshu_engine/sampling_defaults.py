@@ -100,6 +100,8 @@ def read_generation_config(model_path: str | Path | None) -> dict[str, float | i
                         logger.warning(
                             "ignoring %s=%r in %s (out of range)", gk, g[gk], fp
                         )
+            if g.get("do_sample") is False:  # HF GenerationConfig: greedy, temperature ignored
+                out["temperature"] = 0.0
     except Exception:
         logger.warning("unreadable generation_config.json at %s", fp, exc_info=True)
     with _LOCK:

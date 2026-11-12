@@ -1213,7 +1213,16 @@ def first_round(emitted: int) -> bool:
 
 
 def supported(lm, draft):
-    """The same wide, dense 27B Q4 lane certified by the serving A/B."""
+    """The same wide, dense 27B Q4 lane certified by the serving A/B (a miss is counted)."""
+    from . import fallbacks
+
+    ok = _supported(lm, draft)
+    if not ok:
+        fallbacks.record("dflash_fast_unsupported", "27B Q4 wide lane not available")
+    return ok
+
+
+def _supported(lm, draft):
     from .dflash_context import context_window
     from .kernels.lane_linear import LaneLinear
     from .kernels.tensorfold import lane_qmm

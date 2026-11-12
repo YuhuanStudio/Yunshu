@@ -3478,7 +3478,13 @@ async def _stream_response(
             yield "data: [DONE]\n\n"
 
         async for chunk in with_sse_keepalive(
-            _token_source(), http_request=request, cancel_event=_cancel_evt
+            _token_source(),
+            http_request=request,
+            cancel_event=_cancel_evt,
+            interval=4.0,  # 2 s polls: a status event every 4 s during prefill
+            keepalive=lambda: format_responses_in_progress(
+                response_id, req.model, seq=_next_seq()
+            ),
         ):
             yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
     except MemoryError:

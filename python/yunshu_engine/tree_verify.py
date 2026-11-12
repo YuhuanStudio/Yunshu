@@ -1159,7 +1159,16 @@ def _tree_attention_fused(
 
 
 def supported(language_model: Any) -> bool:
-    """Tile kernel present, dense Qwen3.5 layers the fused GDN kernels take."""
+    """Tile kernel present, dense Qwen3.5 layers the fused GDN kernels take (a miss is counted)."""
+    from . import fallbacks
+
+    ok = _supported(language_model)
+    if not ok:
+        fallbacks.record("tree_verify_unsupported", "dense Qwen3.5 tree verify not available")
+    return ok
+
+
+def _supported(language_model: Any) -> bool:
     if not ra.tile_ready():
         return False
     try:

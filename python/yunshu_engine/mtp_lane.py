@@ -73,6 +73,16 @@ def set_context(ids: Any) -> None:
 
 
 def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
+    """Verify window width; a width below 32 is a counted fallback."""
+    from . import fallbacks
+
+    rows = _verify_max_rows(lane_projections, language_model)
+    if rows < 32:
+        fallbacks.record("verify_max_rows_narrow", f"verify window {rows} rows (lane not certified wider)")
+    return rows
+
+
+def _verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
     """Widest verify window whose rows equal plain decode: with the lane
     projections and the tile attention kernel the fused GDN, tile attention and
     lane matmul are row-invariant to 32 rows; otherwise (sg8 / packed

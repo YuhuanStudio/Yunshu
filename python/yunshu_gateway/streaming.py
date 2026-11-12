@@ -87,6 +87,7 @@ async def with_sse_keepalive(
     interval: float = 10.0,
     disconnect_poll: float = 2.0,
     cancel_event=None,
+    keepalive=None,
 ) -> AsyncIterator[str]:
     """Wrap an SSE generator to send periodic keep-alive comments.
 
@@ -104,6 +105,10 @@ async def with_sse_keepalive(
     client disconnect is detected. This allows the engine's generation
     loop to cooperatively stop GPU work immediately rather than waiting
     for the next iteration.
+
+    keepalive, when given, is a callable whose string replaces the comment as the periodic
+    keep-alive (Responses sends a real response.in_progress event, which idle timers that
+    ignore comments count as traffic).
     """
     ait = generator.__aiter__()
     reader: asyncio.Task | None = None
@@ -169,7 +174,7 @@ async def with_sse_keepalive(
                 keepalive_elapsed += wait_time
                 if keepalive_elapsed >= interval:
                     keepalive_elapsed = 0.0
-                    yield ": keep-alive\n\n"
+                    yield keepalive() if keepalive is not None else ": keep-alive\n\n"
             if kind is _END:
                 return
             if kind is _FAIL:

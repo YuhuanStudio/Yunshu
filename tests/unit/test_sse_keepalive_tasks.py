@@ -98,3 +98,27 @@ def test_keepalive_comments_while_waiting_and_close_cancels_producer():
 
     asyncio.run(run())
     assert state["closed"]
+
+
+def test_keepalive_callable_replaces_comment():
+    # Responses sends a real response.in_progress event as its keep-alive during a long prefill.
+    async def slow():
+        await asyncio.sleep(0.25)
+        yield "data: done\n\n"
+
+    seq = iter(range(1, 100))
+
+    async def run():
+        return await _collect(
+            with_sse_keepalive(
+                slow(),
+                interval=0.05,
+                disconnect_poll=0.05,
+                keepalive=lambda: f"event: response.in_progress {next(seq)}\n\n",
+            )
+        )
+
+    out = asyncio.run(run())
+    beats = [x for x in out if x.startswith("event: response.in_progress")]
+    assert len(beats) >= 2 and out[-1] == "data: done\n\n"
+    assert not any(x == ": keep-alive\n\n" for x in out[1:])

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -333,8 +334,10 @@ class OmniEngine:
         audio_path: str | None = None,
         speaker: SpeakerName | None = None,
         thinker_max_new_tokens: int | None = None,
+        cancel: threading.Event | None = None,
     ) -> AsyncIterator[OmniChunk]:
         """Stream Thinker text + Talker audio for one turn (single-flight).
+        Setting ``cancel`` stops the generation before its next step.
 
         Yields OmniChunks: text fragments, then audio chunks, then a final
         ``done`` chunk with latency stats.
@@ -365,7 +368,7 @@ class OmniEngine:
             start = loop.time()
             first_audio: float | None = None
             audio_samples = 0
-            async for kind, data in self._iter_materialized(conv, spk, tmax):
+            async for kind, data in self._iter_materialized(conv, spk, tmax, cancel):
                 now = loop.time() - start
                 if kind == "text":
                     if data:
@@ -419,13 +422,17 @@ class OmniEngine:
             },
         )
 
-    async def _iter_materialized(self, conv: list[dict], spk: str, tmax: int):
+    async def _iter_materialized(
+        self, conv: list[dict], spk: str, tmax: int, cancel: threading.Event | None = None
+    ):
         """Yield (kind, cpu_data) with mx arrays materialized to CPU (str for text,
         numpy for audio). A reused model lives on the shared executor thread (which
         owns generation_stream / Stream(gpu,1)), so its generation AND its
         materialization run there; a self-loaded model runs inline on this thread."""
         if not self._shared:
             for kind, payload in self._make_gen(conv, spk, tmax):
+                if cancel is not None and cancel.is_set():
+                    return
                 if kind == "text":
                     yield ("text", self._decode_fragment(payload))
                 elif kind == "audio":
@@ -458,6 +465,9 @@ class OmniEngine:
                 return (kind, None)
 
         while True:
+            if cancel is not None and cancel.is_set():
+                await loop.run_in_executor(ex, gen.close)
+                return
             item = await loop.run_in_executor(ex, _step)
             if item is _DONE:
                 return

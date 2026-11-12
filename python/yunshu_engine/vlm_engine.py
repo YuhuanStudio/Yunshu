@@ -1064,6 +1064,14 @@ class VLMEngine:
     # ── Generation ──
 
     def _apc_capacity_allows(self, input_ids) -> bool:
+        from . import fallbacks
+
+        ok = self._apc_capacity_fits(input_ids)
+        if not ok:
+            fallbacks.record("apc_capacity_chunked", "prompt exceeds the APC RAM budget; chunked prefill")
+        return ok
+
+    def _apc_capacity_fits(self, input_ids) -> bool:
         """Avoid costly chunked prefill when this Qwen cache cannot be retained.
 
         Calibrated from 8K/32K/64K checkpoint resident-byte probes. Keep a

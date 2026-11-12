@@ -495,3 +495,15 @@ def test_greedy_keeps_neutral_penalties(kind, named):
     assert req.temperature == 0.0
     if hasattr(req, "presence_penalty"):
         assert req.presence_penalty == sd.API_DEFAULTS["presence_penalty"]
+
+
+def test_do_sample_false_means_greedy(tmp_path):
+    # HF transformers GenerationConfig: do_sample=False is greedy decoding and temperature is ignored.
+    from yunshu_engine.sampling_defaults import read_generation_config
+
+    d = tmp_path / "m"
+    d.mkdir()
+    (d / "generation_config.json").write_text(
+        json.dumps({"do_sample": False, "temperature": 0.6, "top_p": 0.9})
+    )
+    assert read_generation_config(d)["temperature"] == 0.0
