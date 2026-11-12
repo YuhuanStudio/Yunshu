@@ -190,6 +190,7 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(
         subprocess=SimpleNamespace(Popen=lambda *a, **k: None),
         Srv=create_server,
         D="/fixture/drafter",
+        default_drafter=lambda model: "/fixture/drafter",
         load_prompt=lambda name: "prompt",
         req=lambda model, prompt, count: dict(
             messages=[dict(role="user", content=prompt)]
@@ -462,3 +463,21 @@ def test_ttft_split_preserves_exclusive_sum_without_double_counting_nested_io():
         lookup=4, ssd_read=24, restore=3, suffix_prefill=9, first_token=5, other=2
     )
     assert sum(split.values()) == sum(stages.values())
+
+
+def test_dflash_setting_follows_the_served_model(tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        "tfbench_for_probe", _PATH.parent / "tfbench.py"
+    )
+    tb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tb)
+    flash = tmp_path / "flash"
+    flash.mkdir()
+    (flash / "config.json").write_text(
+        json.dumps({"text_config": {"hidden_size": 2560, "mtp_num_hidden_layers": 1}})
+    )
+    (flash / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc.weight": "a"}})
+    )
+    assert probe.draft_setting("dflash", str(flash), tb) == "mtp"  # not the 27B drafter
+    assert probe.draft_setting("off", str(flash), tb) == "off"

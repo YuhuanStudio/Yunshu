@@ -422,6 +422,24 @@ for _ntok in (4096, 20480):
             "phaseb_shapes": ["greedy", "seeded"],
         }
 
+# solo == concurrent for the candidate arm alone (set its env with --cand-env), Flash-Next 8K
+SUITES["phaseb-8k-ident"] = {
+    "stages": ["phaseb-identity"],
+    "phaseb_ctx_tokens": [8192],
+    "phaseb_scenarios": ["solo", "burst4", "stagger"],
+    "phaseb_shapes": ["greedy"],
+    "phaseb_arms": ["cand"],
+}
+# two cold 8K prompts at once, base vs cand (--cand-env): the other row's TTFT must not get slower
+SUITES["phaseb-8k-burst2"] = {
+    "stages": ["phaseb-speed"],
+    "phaseb_ctx_tokens": [8192],
+    "phaseb_scenarios": ["burst2"],
+    "phaseb_shapes": ["greedy"],
+    "phaseb_tokens": 64,
+    "speed_tol_pct": 5.0,
+}
+
 SUITES["phaseb2-ident"] = {
     "stages": ["phaseb-identity"],
     "phaseb_ctx_tokens": [4096],

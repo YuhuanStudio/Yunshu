@@ -1631,6 +1631,19 @@ class RoundDriver:
                                     self._logits(h[offset : offset + 32]),
                                 )
                         per_seg.append(got)
+                        if pf is not None:
+                            wait_s, asked, served = pf.take_stats()
+                            logger.info(
+                                "fn_ple span=%d:%d ple_wait=%.1f ms rows=%d prefetched=%d"
+                                " (before: %.1f ms %d rows)",
+                                it.start,
+                                it.end,
+                                wait_s * 1e3,
+                                asked,
+                                served,
+                                pf.before[0] * 1e3,
+                                pf.before[1],
+                            )
                     if pf is not None:
                         self._ple_lookahead(pf, items, budget)
                     span_t.append(time.perf_counter())

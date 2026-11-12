@@ -22,6 +22,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+def draft_setting(draft, model, tfbench):
+    """ "dflash" means the drafter that fits the served model (27B DFlash2, else its MTP head)."""
+    return tfbench.default_drafter(model) if draft == "dflash" else draft
+
+
 def timeline(samples, t_lo, t_hi, min_ms=5.0):
     """Collapse samples of each thread in [t_lo, t_hi] to runs of an identical top-4 stack.
     Returns {thread: [(start_offset_ms, dur_ms, stack_str)]} for runs >= min_ms."""
@@ -396,7 +401,7 @@ def main():
             "session cachedttft-fixed-seed",
             "In one sentence, what is the first file in the repository context about?",
         )
-    extra_env = {"YUNSHU_VLM_DRAFT": tfbench.D if a.draft == "dflash" else a.draft}
+    extra_env = {"YUNSHU_VLM_DRAFT": draft_setting(a.draft, a.model, tfbench)}
     extra_env.update(server_env)
     s = tfbench.Srv("yunshu", extra_env, f"-probe-{a.tag}", model=a.model)
     try:

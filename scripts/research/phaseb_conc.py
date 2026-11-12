@@ -168,7 +168,10 @@ def check_identity(solo, concurrent):
             la, lb = a.get("lps", []), b.get("lps", [])
             tok = next((i for i, (x, y) in enumerate(zip(pa, pb)) if x != y), None)
             lpi = next((i for i, (x, y) in enumerate(zip(la, lb)) if x != y), None)
-            print(f"row {n}: {len(pa)}/{len(pb)} pieces, first text diff {tok}, first logprob diff {lpi}", flush=True)
+            print(
+                f"row {n}: {len(pa)}/{len(pb)} pieces, first text diff {tok}, first logprob diff {lpi}",
+                flush=True,
+            )
             if lpi is not None:
                 print("  ", la[lpi], lb[lpi], flush=True)
         raise RuntimeError(
@@ -384,6 +387,11 @@ def validate_records(
     return True, ""
 
 
+def resolve_draft(a, tfbench):
+    """--draft, else the drafter that fits the served model (27B DFlash2, a model's own MTP head, off)."""
+    return a.draft or tfbench.default_drafter(a.model)
+
+
 def main():
     a = parser().parse_args()
     validate(a)
@@ -396,6 +404,7 @@ def main():
     except ImportError:
         import tfbench as t
         from sampledspec_conc import arm_order
+    a.draft = resolve_draft(a, t)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     t.OUT = a.out.parent / (a.out.stem + "-servers")
     reference = {}
@@ -414,7 +423,7 @@ def main():
                 YUNSHU_VLM_APC_DISK="0",
                 YUNSHU_VLM_APC_MEMORY_GB="0",
                 YUNSHU_VLM_APC_DISK_DIR=str(home),
-                YUNSHU_VLM_DRAFT="off" if arm == "off" else (a.draft or t.D),
+                YUNSHU_VLM_DRAFT="off" if arm == "off" else a.draft,
                 YUNSHU_NEXT_TURN_PREFILL="off",
                 YUNSHU_CONSOLE="0",
             )

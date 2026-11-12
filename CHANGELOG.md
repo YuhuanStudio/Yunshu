@@ -33,6 +33,7 @@ patch release collects them.
 |---|---|---|---|---|
 | M5 Max | Gemma 4 E2B, generic layer | 2 concurrent rows, decode | 206 → 173 tok/s | `genericinv` line, 6ed237233 |
 | M5 Max | Qwen3.8-27B MTP, zh-CN 1K | follow-up decode | −4.2 % (one prompt's MTP acceptance changed under the new deps) | deps verification, 06c8cb67b |
+| M5 Max | Flash-Next oQ2.5e, cold prefill | TTFT 8K / 32K / 64K | 8.1 → 5.4 s (8K code), 26.6 → 19.7 s (32K code), 50.5 → 40.3 s (64K code); identity 0 diffs | PLE prefetch on by default, pleprefetch3 |
 
 ### Added
 

@@ -276,6 +276,16 @@ def test_speed_verdict_reports_uncovered_stagger_instead_of_aborting():
     assert any("stagger did not cover" in x for x in p.speed_verdict(rows)[0])
 
 
+def test_default_draft_fits_the_served_model():
+    from types import SimpleNamespace
+
+    tb = SimpleNamespace(
+        default_drafter=lambda model: "mtp"
+    )  # Flash-Next: not the 27B drafter
+    assert p.resolve_draft(SimpleNamespace(draft=None, model="m"), tb) == "mtp"
+    assert p.resolve_draft(SimpleNamespace(draft="off", model="m"), tb) == "off"
+
+
 def _burst_cell(arm, rep, first, tps, aggregate):
     # arrival rank 1 is the row that reached the server first; labels swap between arms
     per_row = {name: dict(tps=tps[i], start=0.1 * i) for i, name in enumerate(first)}

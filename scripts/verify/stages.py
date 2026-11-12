@@ -3439,6 +3439,11 @@ def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
 
 
+def _cand_env_flags(ctx: Ctx) -> list[str]:
+    """``--cand-env`` flags so a candidate-only server env reaches phaseb_conc's cand arm."""
+    return [x for k, v in ctx.cand_env.items() for x in ("--cand-env", f"{k}={v}")]
+
+
 def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
     """Agent-shaped 1/2/4-row drafting and stagger, matched against solo."""
     from scripts.research.phaseb_conc import speed_verdict, validate_records
@@ -3481,6 +3486,7 @@ def stage_phaseb(ctx: Ctx, *, speed: bool = False) -> StageResult:
                             str(rep),
                             "--tokens",
                             str(ctx.suite.get("phaseb_tokens", 1500 if speed else 256)),
+                            *_cand_env_flags(ctx),
                             "--arms",
                             *arms,
                             "--scenarios",

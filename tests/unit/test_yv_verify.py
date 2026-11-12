@@ -2411,3 +2411,16 @@ def test_per_change_suites_check_spec_off_and_2k_context():
     for name in ("decode", "quick", "full"):
         assert suites.SUITES[name]["spec_off"] is True, name
         assert 2048 in suites.SUITES[name]["ctx"], name
+
+
+def test_phaseb_cells_pass_the_candidate_env(tmp_path):
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace(cand_env={"YUNSHU_EXAMPLE": "1"})
+    assert stages._cand_env_flags(ctx) == ["--cand-env", "YUNSHU_EXAMPLE=1"]
+    assert stages._cand_env_flags(SimpleNamespace(cand_env={})) == []
+
+
+def test_phaseb_8k_suites_exist():
+    assert suites.SUITES["phaseb-8k-ident"]["phaseb_arms"] == ["cand"]
+    assert suites.SUITES["phaseb-8k-burst2"]["phaseb_scenarios"] == ["burst2"]

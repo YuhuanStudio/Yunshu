@@ -268,12 +268,39 @@ def test_parallel_reader_equals_serial(tmp_path):
     reader.close()
 
 
-def test_attach_follows_the_flag(monkeypatch):
-    from yunshu_engine import settings
+def test_attach_is_none_without_an_ssd_ple_table():
+    from types import SimpleNamespace
 
-    lm = object()
-    monkeypatch.setattr(
-        pp, "_ple_module", lambda m: pytest.fail("flag off: not looked up")
+    no_ple = SimpleNamespace(
+        model=SimpleNamespace(layers=[SimpleNamespace(), SimpleNamespace(ple=None)])
     )
-    assert settings.get("YUNSHU_PLE_PREFETCH") is False
-    assert pp.attach(lm) is None
+    assert pp.attach(no_ple) is None
+
+
+def test_blocked_time_and_row_counts_are_reported(tmp_path):
+    reference, table = _pair(tmp_path)
+    params = _params()
+    pf = pp.PLEPrefetch(table, params)
+    ids = _tokens(12, 32)
+    assert pf.submit_span(ids.tolist(), 0, len(ids))
+    pf.begin(len(ids), 0, len(ids))
+    request = np.unique(pp.span_row_ids(np.concatenate([[0, 0], ids]), params))
+    table._read_rows(request)
+    blocked, asked, served = pf.take_stats()
+    assert asked == len(request) and served == len(request) and blocked > 0
+    assert pf.take_stats() == (0.0, 0, 0)  # reset by the read
+    table._read_rows(np.asarray([1, 2, 3]))  # not prefetched: counted as asked only
+    assert pf.take_stats()[1] == 3
+    pf.close()
+
+
+def test_stats_of_a_span_exclude_reads_made_before_it_began(tmp_path):
+    _, table = _pair(tmp_path)
+    pf = pp.PLEPrefetch(table, _params())
+    table._read_rows(np.asarray([1, 2, 3]))  # decode-time reads between two prompts
+    pf.begin(50, 0, 50)
+    assert pf.take_stats() == (0.0, 0, 0)
+    assert pf.before[1] == 3 and pf.before[0] > 0  # still reported as "before"
+    table._read_rows(np.asarray([4, 5]))
+    assert pf.take_stats()[1] == 2
+    pf.close()

@@ -46,15 +46,6 @@ EVIDENCE = {
         ],
         "Speed A/B queued; KLD vs reference and peak memory at 8192 are the open items before a default.",
     ),
-    "YUNSHU_PLE_PREFETCH": (
-        "prefill",
-        "measured",
-        [
-            "tests/unit/test_ple_prefetch.py (prefetched rows == synchronous rows, counters, bounded buffer, cancel)",
-            "verify run fn-pleprefetch3-a9bc0de927f0 (Flash-Next oQ2.5e: identity 18 cells 0 diffs; cold TTFT -33% 8K, -7..-26% 32K, -19..-20% 64K; decode in noise)",
-        ],
-        "Rows are served by row id (byte-identical by construction); solo == concurrent check, then default on and delete the flag.",
-    ),
 }
 
 

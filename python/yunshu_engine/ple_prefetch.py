@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -206,6 +207,8 @@ class PLEPrefetch:
         )
         self._pending: deque[_Entry] = deque()
         self._current: _Entry | None = None
+        self._blocked_s, self._asked, self._served = 0.0, 0, 0
+        self.before = (0.0, 0)
         self._original = table._read_rows
         self._closed = False
         table._read_rows = (
@@ -240,6 +243,9 @@ class PLEPrefetch:
         """The span ``start:end`` of an ``n_ids`` prompt is about to be built: its entry (if any)
         serves the table's reads; entries of earlier spans or other prompts are dropped."""
         self._current = None
+        # what was read since the previous span (decode steps of the last request) stays visible
+        self.before = (self._blocked_s, self._asked)
+        self._blocked_s, self._asked, self._served = 0.0, 0, 0
         for entry in list(self._pending):
             if entry.key == (n_ids, start, end):
                 self._current = entry
@@ -265,8 +271,23 @@ class PLEPrefetch:
         entry.cancel.set()
 
     # ── consumer (MLX thread): the table's ``_read_rows`` ────────────────
+    def take_stats(self) -> tuple[float, int, int]:
+        """(seconds the MLX thread was blocked in row reads, rows asked, rows served by a prefetch)
+        since the last call."""
+        out = (self._blocked_s, self._asked, self._served)
+        self._blocked_s, self._asked, self._served = 0.0, 0, 0
+        return out
+
     def _read_rows(self, row_ids):
+        t0 = time.perf_counter()
+        try:
+            return self._read_rows_inner(row_ids)
+        finally:
+            self._blocked_s += time.perf_counter() - t0
+
+    def _read_rows_inner(self, row_ids):
         row_ids = np.asarray(row_ids, dtype=np.int64)
+        self._asked += len(row_ids)
         entry = self._current
         if not row_ids.size or entry is None:
             return self._original(row_ids)
@@ -286,6 +307,7 @@ class PLEPrefetch:
                 out[k][missing] = read[k]
         # counters as upstream keeps them: every served row is a miss (the table has no row cache here)
         served_count = len(row_ids) - missing.size
+        self._served += served_count
         table._misses += served_count
         table._bytes += served_count * sum(a[0].nbytes for a in out)
         return tuple(out)
@@ -320,9 +342,7 @@ def _ple_module(lm):
 
 def attach(lm) -> PLEPrefetch | None:
     """The prefetch for ``lm``'s PLE table, or None when it does not apply (memory table, a
-    row cache, flag off). Call on the MLX thread."""
-    if not settings.get("YUNSHU_PLE_PREFETCH"):
-        return None
+    row cache, no PLE layer). Call on the MLX thread."""
     mod = _ple_module(lm)
     if mod is None:
         return None

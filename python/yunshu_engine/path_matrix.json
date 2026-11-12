@@ -1967,7 +1967,6 @@
     "YUNSHU_MEMORY_ADMISSION": "idle_memory_return",
     "YUNSHU_MEMORY_RESERVE_GB": "idle_memory_return",
     "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows",
-    "YUNSHU_PLE_PREFETCH": "ple_ssd_rows",
     "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
     "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
     "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
