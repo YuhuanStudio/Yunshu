@@ -18,12 +18,14 @@ def one_atom_prefill_segments(monkeypatch):
     """The tiny model's prefill is not split-invariant (the real kernels are): a segment that merges
     atoms only when no row decodes would make solo and beside-others prefills differ in bf16 too.
     One atom per segment pins prefill, so these tests isolate the decode / verify KV path."""
-    from yunshu_engine.round_driver.driver import RoundDriver
+    from yunshu_engine.round_driver.layer import PackedLayer
 
     monkeypatch.setattr(
-        RoundDriver,
-        "_run_end",
-        lambda self, row, start, budget: self._span_end(row, start),
+        PackedLayer,
+        "span_end",
+        lambda self, row, start, budget, *, atom, scoring=False: self.cut(
+            row, start, atom
+        ),
     )
 
 

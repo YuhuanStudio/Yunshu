@@ -13,13 +13,18 @@ layer object (C8).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, cast
 
 import mlx.core as mx
 
 from . import flashnext, forward, generic
 from .batch import MAX_WINDOW, DecodeBatch
+
+SCORING_SPAN = (
+    32  # prompt_logprobs (generic): one prompt span scores at most this many rows
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,18 @@ class ModelLayer(Protocol):
         """Per-row layer state, set in ``RoundDriver.add`` before the APC restore."""
         ...
 
+    def span_end(
+        self,
+        row: Any,
+        start: int,
+        budget: int,
+        *,
+        atom: Callable[[int], int],
+        scoring: bool = False,
+    ) -> int:
+        """End of the prompt segment that starts at ``start`` (the layer's own plan)."""
+        ...
+
 
 class PackedLayer:
     """Qwen3.5 family (dense and MoE): ``forward.py`` packed rows, ``DecodeBatch`` slot buffers."""
@@ -150,6 +167,66 @@ class PackedLayer:
     def admit(self, row: Any, req: Any) -> None:
         return None  # no per-row layer state (driver.py add)
 
+    def cut(self, row: Any, start: int, atom: Callable[[int], int]) -> int:
+        """End of the one prompt atom that starts at ``start``: the next multiple of the atom size, cut at the
+        row's next APC checkpoint and at the prompt's end. Split-invariant prefill keeps the plan a function of
+        the prompt alone (grid plus checkpoints, so a restored row continues with a cold prefill's spans)."""
+        a = atom(start)
+        n = len(row.req.ids)
+        end = min((start // a + 1) * a, n)
+        # The prompt's tail (the rows after its last 64-aligned boundary) always runs apart, as in
+        # main's absolute prompt steps (boundary = min(grid, (end - 1) // 64 * 64)): a cell that
+        # contains the boundary is cut there even when no checkpoint is planned (a short prompt, a
+        # request that stores nothing). Without this cut a 99-row prompt ran as ONE span on the
+        # long kernels where main runs 64 rows + a 35-row tail on the tail kernels.
+        limit = (n - 1) // 64 * 64
+        if start < limit < end:
+            end = limit
+        for c in row.ckpts:
+            if start < c < end:
+                end = c
+                break
+        return end
+
+    def span_end(
+        self,
+        row: Any,
+        start: int,
+        budget: int,
+        *,
+        atom: Callable[[int], int],
+        scoring: bool = False,
+    ) -> int:
+        """End of the segment a prefill step runs for ``row`` from ``start``: consecutive atoms (as many as
+        ``budget`` takes) become ONE segment, so a step runs large matmuls and a restored prompt's remainder
+        is one forward (not one per grid cell). A run stops at a checkpoint (its state is stored there) and
+        before the prompt's tail (the tail runs apart, on the tail kernels, as in a restored run). Prefill
+        arithmetic is split-invariant at 64-aligned boundaries (nax matmul, BQ32 attention, chunked GDN), so
+        the segment size never changes a prompt's output. ``scoring`` (prompt_logprobs) is generic-only."""
+        end = self.cut(row, start, atom)
+        limit = (len(row.req.ids) - 1) // 64 * 64
+        while end not in row.ckpts and end < limit:
+            nxt = self.cut(row, end, atom)
+            # a run keeps one atom size (the long-position atoms read the KV in
+            # fewer, larger passes)
+            if nxt > limit or nxt - start > budget or atom(end) != atom(start):
+                break
+            end = nxt
+        return end
+
+
+def _grid_cut(row: Any, start: int, atom: Callable[[int], int]) -> int:
+    """Flash-Next and generic prompt span: the absolute grid plus the row's checkpoints and nothing else.
+    Flash-Next prefill is not split-invariant (chunked GDN, stock matmuls), so a cold run and a hit run the
+    same spans (no 64-aligned tail cut, no run of several atoms)."""
+    a = atom(start)
+    n = len(row.req.ids)
+    end = min((start // a + 1) * a, n)
+    for c in row.ckpts:
+        if start < c < end:
+            return cast(int, c)
+    return end
+
 
 class FlashNextLayer:
     """Flash-Next (Qwen4): ``flashnext.py`` HC/QSA/GDN/MoE forward, ``FlashNextBatch``."""
@@ -212,6 +289,17 @@ class FlashNextLayer:
     def admit(self, row: Any, req: Any) -> None:
         return None  # no per-row layer state (driver.py add)
 
+    def span_end(
+        self,
+        row: Any,
+        start: int,
+        budget: int,
+        *,
+        atom: Callable[[int], int],
+        scoring: bool = False,
+    ) -> int:
+        return _grid_cut(row, start, atom)  # one span per grid cell, no run merge
+
 
 class GenericLayer:
     """Every other mlx-vlm family: the model's own upstream forward per row, no drafter (``generic.py``)."""
@@ -269,6 +357,20 @@ class GenericLayer:
             raise ValueError("generic round driver row: prompt_kwargs are required")
         row.features = generic.PromptFeatures(req.prompt_kwargs, len(req.ids))
         row.state = generic.RowState()
+
+    def span_end(
+        self,
+        row: Any,
+        start: int,
+        budget: int,
+        *,
+        atom: Callable[[int], int],
+        scoring: bool = False,
+    ) -> int:
+        end = _grid_cut(row, start, atom)
+        if scoring:
+            end = min(end, start + SCORING_SPAN)
+        return end
 
 
 class LayerRegistry:

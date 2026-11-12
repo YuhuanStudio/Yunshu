@@ -861,64 +861,6 @@ class RoundDriver:
         """Atom size of the prompt span that starts at ``pos``."""
         return self.long_chunk if pos >= self.long_from else self.chunk
 
-    def _span_end(self, row: _Row, start: int) -> int:
-        """End of the prompt span that starts at ``start``: the next multiple
-        of ``chunk``, cut at the row's next APC checkpoint and at the prompt's
-        end. The plan depends on the prompt alone (grid plus its
-        checkpoints), so a row restored at a checkpoint on the grid continues
-        with the spans a cold prefill would have run."""
-        a = self.atom(start)
-        n = len(row.req.ids)
-        end = min((start // a + 1) * a, n)
-        if self.flash or self.generic:
-            # Flash-Next prefill is not split-invariant (chunked GDN, stock matmuls), so the plan is
-            # the absolute grid plus the row's checkpoints and nothing else: a cold run and a hit
-            # run the same spans (no 64-aligned tail cut, no run of several atoms).
-            for c in row.ckpts:
-                if start < c < end:
-                    return cast(int, c)
-            return end
-        # The prompt's tail (the rows after its last 64-aligned boundary) always runs apart, as in
-        # main's absolute prompt steps (boundary = min(grid, (end - 1) // 64 * 64)): a cell that
-        # contains the boundary is cut there even when no checkpoint is planned (a short prompt, a
-        # request that stores nothing). Without this cut a 99-row prompt ran as ONE span on the
-        # long kernels where main runs 64 rows + a 35-row tail on the tail kernels.
-        limit = (n - 1) // 64 * 64
-        if start < limit < end:
-            end = limit
-        for c in row.ckpts:
-            if start < c < end:
-                end = c
-                break
-        return end
-
-    def _run_end(self, row: _Row, start: int, budget: int) -> int:
-        """End of the segment a prefill step runs for ``row`` from ``start``:
-        consecutive atoms (as many as ``budget`` takes) become ONE segment, so a
-        step runs large matmuls and a restored prompt's remainder is one forward
-        (not one per grid cell). A run stops at a checkpoint (its state is stored
-        there) and before the prompt's tail (the rows after the last 64-aligned
-        boundary: the tail runs apart, on the tail kernels, as in a restored
-        run). Prefill arithmetic is split-invariant at 64-aligned boundaries
-        (nax matmul, BQ32 attention, chunked GDN), so the segment size never
-        changes a prompt's output."""
-        end = self._span_end(row, start)
-        if self.flash or self.generic:
-            return end
-        limit = (len(row.req.ids) - 1) // 64 * 64
-        while end not in row.ckpts and end < limit:
-            nxt = self._span_end(row, end)
-            # a run keeps one atom size (the long-position atoms read the KV in
-            # fewer, larger passes)
-            if (
-                nxt > limit
-                or nxt - start > budget
-                or self.atom(end) != self.atom(start)
-            ):
-                break
-            end = nxt
-        return end
-
     def _store_window(self, row: _Row, end: int) -> None:
         if self.dflash is None or not self.dflash.can_draft:
             return
@@ -1543,7 +1485,9 @@ class RoundDriver:
         for _ in range(ple_prefetch.MAX_PENDING):
             if start >= len(ids):
                 break
-            end = self._run_end(row, start, max(budget, self.chunk))
+            end = self.layer.span_end(
+                row, start, max(budget, self.chunk), atom=self.atom
+            )
             pf.submit_span(ids, start, end)
             start = end
 
@@ -1602,9 +1546,13 @@ class RoundDriver:
                 continue
             while budget > 0 and r.done < len(ids):
                 start = r.done
-                end = self._run_end(r, start, budget)
-                if r.req.prompt_logprobs is not None and self.generic:
-                    end = min(end, start + 32)
+                end = self.layer.span_end(
+                    r,
+                    start,
+                    budget,
+                    atom=self.atom,
+                    scoring=r.req.prompt_logprobs is not None,
+                )
                 assert r.cache is not None
                 chunk = mx.array(ids[start:end], dtype=mx.int32)
                 items.append(

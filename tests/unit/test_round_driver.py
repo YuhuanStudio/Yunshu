@@ -87,14 +87,16 @@ def one_atom_prefill_segments(monkeypatch, request):
     """The tiny model's prefill is not split-invariant (the 27B's NAX / BQ32 / chunked-GDN prefill is):
     a segment that merges atoms only while no row decodes would make a row's solo and beside-others
     prefills differ. One atom per segment pins prefill, so these tests isolate the decode forwards."""
-    from yunshu_engine.round_driver.driver import RoundDriver
+    from yunshu_engine.round_driver.layer import PackedLayer
 
     if any(k in request.node.name for k in ("atoms", "prompt_tail")):
         return  # these tests are about how segments merge
     monkeypatch.setattr(
-        RoundDriver,
-        "_run_end",
-        lambda self, row, start, budget: self._span_end(row, start),
+        PackedLayer,
+        "span_end",
+        lambda self, row, start, budget, *, atom, scoring=False: self.cut(
+            row, start, atom
+        ),
     )
 
 
@@ -334,28 +336,33 @@ def test_prefill_atoms_merge_up_to_checkpoints_and_the_tail():
     from yunshu_engine.round_driver import driver as drv
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
-    # the packed prefill plan: _span_end / _run_end read these flags (bf52d4a99 added them)
-    d.flash = d.generic = False
+    from yunshu_engine.round_driver.layer import PackedLayer
+
+    layer = PackedLayer.__new__(PackedLayer)  # the packed prefill plan (layer.py)
     d.chunk = 512
     d.long_from, d.long_chunk = 1 << 60, 2048
     ids = list(range(512 * 6 + 40))
     row = SimpleNamespace(req=SimpleNamespace(ids=ids), ckpts=[])
-    assert d._run_end(row, 0, 512) == 512  # budget of one atom
-    assert d._run_end(row, 0, 4096) == 512 * 6  # the tail atom stays apart
-    assert d._run_end(row, 512 * 6, 4096) == len(ids)
+    assert layer.span_end(row, 0, 512, atom=d.atom) == 512  # budget of one atom
+    assert (
+        layer.span_end(row, 0, 4096, atom=d.atom) == 512 * 6
+    )  # the tail atom stays apart
+    assert layer.span_end(row, 512 * 6, 4096, atom=d.atom) == len(ids)
     row.ckpts = [1024, len(ids) - 1]
-    assert d._run_end(row, 0, 4096) == 1024  # stops at the checkpoint
-    assert d._run_end(row, 1024, 4096) == 512 * 6
-    assert d._run_end(row, 512 * 6, 4096) == len(ids) - 1
+    assert layer.span_end(row, 0, 4096, atom=d.atom) == 1024  # stops at the checkpoint
+    assert layer.span_end(row, 1024, 4096, atom=d.atom) == 512 * 6
+    assert layer.span_end(row, 512 * 6, 4096, atom=d.atom) == len(ids) - 1
     row.ckpts = []
-    assert d._run_end(row, 600, 4096) == 512 * 6  # off the grid: merges to the tail
-    assert d._run_end(row, 1024, 1024) == 2048
+    assert (
+        layer.span_end(row, 600, 4096, atom=d.atom) == 512 * 6
+    )  # off the grid: merges to the tail
+    assert layer.span_end(row, 1024, 1024, atom=d.atom) == 2048
     # a restored prompt's remainder off the grid is one forward up to its checkpoint
     long_ids = list(range(7248))
     row = SimpleNamespace(req=SimpleNamespace(ids=long_ids), ckpts=[7232])
     d.long_from = 1 << 60
-    assert d._run_end(row, 6912, 2048) == 7232
-    assert d._run_end(row, 7232, 2048) == 7248  # the tail stays apart
+    assert layer.span_end(row, 6912, 2048, atom=d.atom) == 7232
+    assert layer.span_end(row, 7232, 2048, atom=d.atom) == 7248  # the tail stays apart
 
 
 # ── keyed sampling: sampled rows draft and stay on their own stream ─────────
@@ -554,20 +561,23 @@ def test_atoms_grow_with_the_absolute_position():
     from yunshu_engine.round_driver import driver as drv
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
-    # the packed prefill plan: _span_end / _run_end read these flags (bf52d4a99 added them)
-    d.flash = d.generic = False
+    from yunshu_engine.round_driver.layer import PackedLayer
+
+    layer = PackedLayer.__new__(PackedLayer)  # the packed prefill plan (layer.py)
     d.chunk = 512
     d.long_from, d.long_chunk = 2048, 1024
     ids = list(range(2048 + 1024 * 3 + 40))
     row = SimpleNamespace(req=SimpleNamespace(ids=ids), ckpts=[])
     assert [d.atom(p) for p in (0, 1536, 2048, 5000)] == [512, 512, 1024, 1024]
-    assert d._span_end(row, 0) == 512
-    assert d._span_end(row, 1536) == 2048
-    assert d._span_end(row, 2048) == 3072
-    assert d._span_end(row, 2500) == 3072  # restored off the grid: alone
-    assert d._run_end(row, 0, 8192) == 2048  # 512-atoms merge up to the switch
-    assert d._run_end(row, 2048, 8192) == 2048 + 1024 * 3
-    assert d._run_end(row, 2048, 1024) == 3072
+    assert layer.cut(row, 0, d.atom) == 512
+    assert layer.cut(row, 1536, d.atom) == 2048
+    assert layer.cut(row, 2048, d.atom) == 3072
+    assert layer.cut(row, 2500, d.atom) == 3072  # restored off the grid: alone
+    assert (
+        layer.span_end(row, 0, 8192, atom=d.atom) == 2048
+    )  # 512-atoms merge up to the switch
+    assert layer.span_end(row, 2048, 8192, atom=d.atom) == 2048 + 1024 * 3
+    assert layer.span_end(row, 2048, 1024, atom=d.atom) == 3072
 
 
 def test_sampled_bf16_rows_do_not_depend_on_drafting(tiny):
@@ -913,8 +923,9 @@ def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
     from yunshu_engine.round_driver import driver as drv
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
-    # the packed prefill plan: _span_end / _run_end read these flags (bf52d4a99 added them)
-    d.flash = d.generic = False
+    from yunshu_engine.round_driver.layer import PackedLayer
+
+    layer = PackedLayer.__new__(PackedLayer)  # the packed prefill plan (layer.py)
     d.chunk = 512
     d.long_from, d.long_chunk = 1 << 60, 2048
 
@@ -924,7 +935,7 @@ def test_prompt_tail_runs_apart_even_without_a_checkpoint(tiny, monkeypatch):
         )
         spans, at = [], 0
         while at < n:
-            end = d._run_end(row, at, 2048)
+            end = layer.span_end(row, at, 2048, atom=d.atom)
             spans.append((at, end))
             at = end
         return spans

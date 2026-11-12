@@ -19,12 +19,14 @@ N = 20
 def one_atom_prefill_segments(monkeypatch):
     """The tiny model's prefill is not split-invariant (the 27B's NAX / BQ32 prefill is): one atom per
     segment pins prefill so the test isolates the decode / verify forwards."""
-    from yunshu_engine.round_driver.driver import RoundDriver
+    from yunshu_engine.round_driver.layer import PackedLayer
 
     monkeypatch.setattr(
-        RoundDriver,
-        "_run_end",
-        lambda self, row, start, budget: self._span_end(row, start),
+        PackedLayer,
+        "span_end",
+        lambda self, row, start, budget, *, atom, scoring=False: self.cut(
+            row, start, atom
+        ),
     )
 
 

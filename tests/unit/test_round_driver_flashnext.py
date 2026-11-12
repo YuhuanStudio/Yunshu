@@ -118,7 +118,7 @@ def test_flash_spans_are_the_grid_plus_checkpoints_only(tiny):
     # grid 8: spans 0-8, 8-12 (cut at the checkpoint), 12-16, 16-21 (no 64-aligned tail cut)
     ends, at = [], 0
     while at < 21:
-        at = driver._run_end(row, at, 10**6)
+        at = driver.layer.span_end(row, at, 10**6, atom=driver.atom)
         ends.append(at)
     assert ends == [8, 12, 16, 21]
 
