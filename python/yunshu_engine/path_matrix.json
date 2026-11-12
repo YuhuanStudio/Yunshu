@@ -2049,7 +2049,7 @@
         "ev": [
           [
             "python/yunshu_engine/round_driver/flashnext.py",
-            "MAX_CHAIN = 2"
+            "MAX_CHAIN = (\n    2  # default positions per row"
           ]
         ]
       },
