@@ -889,6 +889,11 @@ def checkouts(tmp_path, monkeypatch):
     wt = (tmp_path / "wt").resolve()
     _git(main, "worktree", "add", "-q", "--detach", str(wt))
     monkeypatch.setenv("GPUQ_NO_PREFLIGHT", "1")
+    # a yv preflight runs this file inside a verify tree: its env names that tree, which would make
+    # every submitted job a verify-tree job; the tests model a plain checkout
+    for key, value in list(os.environ.items()):
+        if "/verify/trees/" in value:
+            monkeypatch.delenv(key)
     return main, wt
 
 
@@ -965,7 +970,10 @@ def test_verify_tree_job_may_name_the_main_checkout_harness(monkeypatch):
     every yv --device m3 run ('scripts/dev/.. is in <main>, not the job's source tree')."""
     import gpuq_remote
 
-    main = str(Path(gpuq_remote.__file__).resolve().parents[2])
+    # a fixed main checkout outside BUILD: the test must not depend on where it runs from (a yv
+    # preflight runs it inside a verify tree, which VERIFY_TREE_RE would count as a second tree)
+    main = "/Users/test/Yunshu"
+    monkeypatch.setattr(gpuq_remote, "__file__", main + "/scripts/dev/gpuq_remote.py")
     tree = gpuq_remote.BUILD + "/verify/trees/abc123"
     common = "/common/.git"
     tops = {main: (main, common), tree: (tree, common)}
