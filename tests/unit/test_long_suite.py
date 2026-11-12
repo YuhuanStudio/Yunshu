@@ -49,6 +49,8 @@ def test_part_decode_rejects_short_reply(tfb, monkeypatch, tmp_path):
         + ["--only-kind", "prose", "--decode-tokens", "64"]
     )
     monkeypatch.setattr(tfb, "load_prompt", lambda n: "p")
+    # no tokenizer: the default model path is under /Volumes/P5Plus, which the ci-local sandbox denies
+    monkeypatch.setattr(tfb.pl, "load_tokenizer", lambda path=None: None)
     sent = []
 
     def send(url, body, **_kw):

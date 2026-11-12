@@ -35,6 +35,9 @@ def _prompt_corpus(tmp_path_factory, monkeypatch):
     (work / "prompts").mkdir()
     (work / "prompts" / "prose-1024.txt").write_text("a stand-in prompt. " * 40)
     monkeypatch.setattr(tb, "WORK", work)
+    # no tokenizer: the default model path lives under /Volumes/P5Plus, which the ci-local sandbox denies,
+    # and a stand-in prompt needs no length fitting (decode_prompt returns it unfitted for tok=None)
+    monkeypatch.setattr(tb.pl, "load_tokenizer", lambda path=None: None)
 
 
 def _http_error(code, body):
