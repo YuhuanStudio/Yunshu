@@ -1098,3 +1098,18 @@ def test_forced_windows_on_packed_mtp_layer_equal_serial(tiny, monkeypatch, draf
         assert out == dict(enumerate(scripts))
         steps.append(d.steps)
     assert steps[1] < steps[0]
+
+
+def test_a_narrow_window_never_costs_more_than_a_wider_one():
+    """2026-11-12 costcurve-probe: the first one-row sample (107 ms, one-time work) priced a one-token
+    window above a seven-token one (46 ms); the allocator drafted 6 deep on prose for the whole reply."""
+    from yunshu_engine.round_driver.allocate import CostCurve, allocate
+
+    curve = CostCurve()
+    curve.observe(1, 107.0)
+    curve.observe(7, 46.0)
+    assert curve(1) <= curve(7)
+    # prose-like acceptance: the 1st draft lands half the time, deeper ones rarely
+    probs = [[0.5, 0.15, 0.05, 0.02, 0.01, 0.005]]
+    curve.observe(1, 23.0)  # the honest one-row cost once measured
+    assert allocate(1, probs, curve, 64, 1.6, padded=True)[0] <= 2

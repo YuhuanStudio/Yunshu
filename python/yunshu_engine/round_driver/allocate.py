@@ -90,6 +90,11 @@ class CostCurve:
         else:
             # fall fast (one-time costs inflate early samples), rise slowly
             self.points[rows] = old + (0.5 if ms < old else weight) * (ms - old)
+        # a narrower window runs a subset of a wider one's work: it cannot cost more. An inflated
+        # narrow point would make the allocator prefer deep windows and never re-measure the narrow one
+        here = self.points[rows]
+        for x in [x for x in self.points if x < rows and self.points[x] > here]:
+            self.points[x] = here
 
     def __call__(self, rows: int) -> float:
         if not self.points:

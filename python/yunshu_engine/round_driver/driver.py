@@ -87,6 +87,7 @@ SHORT_STREAK_MAX = (
 IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
+COST_WARM_STEPS = 3  # decode steps a row runs before its step times feed the cost curve
 LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
 # MLX's freed-buffer cache: long prompts allocate transient buffers of ever
 # new sizes (KV growth, attention scores), and left unbounded the cache grew
@@ -1024,6 +1025,15 @@ class RoundDriver:
 
     def _release(self, gone: list[_Row]) -> None:
         """Drop rows' slots in the decode batch and the head's."""
+        if gone and self.head is not None and any(r.generated for r in gone):
+            # what the draft-depth allocator believed when this reply ended: per-width step cost,
+            # per-depth chain cost and the rows' acceptance (compare with the measured tok/s)
+            logger.info(
+                "Round driver draft cost: chain %.2f ms/depth, steps %s, rates %s",
+                self.chain_ms,
+                {k: round(v, 1) for k, v in sorted(self.cost.points.items())},
+                [round(x, 2) for x in gone[0].rates[: self.max_draft]],
+            )
         for r in gone:
             ng = getattr(r, "ngram", None)
             if ng is not None and ng.windows:
@@ -2043,7 +2053,10 @@ class RoundDriver:
         # is not part of the forward) to now
         gpu_free = self._chain_t + self.chain_ms * self._chain_deep / 1e3
         ms = (time.perf_counter() - max(started, gpu_free)) * 1e3
-        if ms > 0:
+        # a row's first decode steps carry one-time work (the head's queued prompt absorb, first
+        # kernel shapes): recorded, they priced a one-token window above a seven-token one and the
+        # allocator then drafted deep for the whole reply (fndepth-b7 prose 8K -40%)
+        if ms > 0 and all(r.generated >= COST_WARM_STEPS for r in rows):
             self.cost.observe(at, ms)
         self._chain_deep = 0
 
