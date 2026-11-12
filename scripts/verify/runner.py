@@ -154,6 +154,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         stages = [s for s in cfg["stages"] if s not in ("kld", "kld_decode")]
         at = stages.index("speed") if "speed" in stages else len(stages)
         cfg["stages"] = stages[:at] + ["kld", "kld_decode"] + stages[at:]
+    if getattr(a, "device", ""):
+        cfg["device"] = a.device
     if getattr(a, "followup_drift_ok", False):
         cfg["followup_drift_ok"] = True
     return cfg

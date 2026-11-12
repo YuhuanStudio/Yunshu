@@ -1908,6 +1908,10 @@ class RoundDriver:
         )
 
     def _decode_step_lone(self) -> list[Event]:
+        from .. import gpu_window
+
+        gpu_window.tick(capture_kernels=False)
+        gpu_window.mark("plain.graph")
         row = self.rows[0]
         tok = row.ahead
         row.ahead = None
@@ -1919,9 +1923,11 @@ class RoundDriver:
         if row.generated + 2 <= row.req.max_tokens:
             row.ahead = self._lone_draw(row, tok.astype(mx.int32))
             mx.async_eval(row.ahead, *self.batch.arrays())
+        gpu_window.mark("plain.readback")
         toks = tok.tolist()  # waits for the step
         events: list[Event] = []
         used = self._emit(row, toks, None, events)
+        gpu_window.mark("plain.host_emit")
         self.batch.commit([used])
         if row.finished:
             self._drop_ahead()

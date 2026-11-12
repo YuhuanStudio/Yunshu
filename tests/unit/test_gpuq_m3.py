@@ -745,3 +745,60 @@ def test_two_verify_trees_refuse_m3(queue, monkeypatch):
     assert row["m3_refused"] and not queue._m3_eligible(row)
     one = queue.submit(["true", VERIFY_TREE + "/a.py"], "one-tree", 1, 0, device="any")
     assert queue._read(queue.JOBS / (one + ".json")).get("m3_refused") == []
+
+
+def test_interposer_under_build_is_copied_as_job_input(monkeypatch, tmp_path):
+    """A DYLD_INSERT_LIBRARIES dylib under BUILD (an output-only dir on the laptop) maps to a
+    copied input, so the round profile's gpu_window finds its metalrt_trace path there."""
+    import gpuq_remote
+
+    build = tmp_path / "build"
+    (build / "metalrt").mkdir(parents=True)
+    dylib = build / "metalrt" / "libmetalrt_trace2.dylib"
+    dylib.write_bytes(b"x")
+    monkeypatch.setattr(gpuq_remote, "BUILD", str(build))
+    monkeypatch.setattr("subprocess.check_output", _toplevel_of)
+    job = dict(
+        id="prof",
+        cwd=MAIN_CHECKOUT,
+        cmd=["python", "--env", f"DYLD_INSERT_LIBRARIES={dylib}"],
+        env={},
+    )
+    _, _, pairs, _ = gpuq_remote.paths(job, "/remote")
+    mapped_arg = gpuq_remote.mapped(job["cmd"][2], pairs)
+    assert mapped_arg == (
+        "DYLD_INSERT_LIBRARIES=/remote/.m3-home/inputs/libmetalrt_trace2.dylib"
+    )
+    assert gpuq_remote.input_files(job["cmd"], job["env"], "/remote") == {
+        str(dylib): "/remote/.m3-home/inputs/libmetalrt_trace2.dylib"
+    }
+
+
+def test_m3_refuses_interposer_without_arm64_slice(monkeypatch, tmp_path):
+    import gpuq_remote
+
+    dylib = tmp_path / "libmetalrt_trace2.dylib"
+    dylib.write_bytes(b"x")
+    monkeypatch.setattr(gpuq_remote, "BUILD", str(tmp_path))
+    cmd = [f"DYLD_INSERT_LIBRARIES={dylib}"]
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "x86_64\n")
+    reasons = gpuq_remote.m3_input_refusals(cmd, {})
+    assert reasons and "no arm64 slice" in reasons[0]
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "arm64 arm64e\n")
+    assert gpuq_remote.m3_input_refusals(cmd, {}) == []
+
+
+def test_tfbench_prompt_directory_is_copied_as_job_input(monkeypatch, tmp_path):
+    """tfbench reads prompts from TFB_WORK (BUILD/tfnew); the laptop needs that directory copied."""
+    import gpuq_remote
+
+    prompts = tmp_path / "tfnew" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "prose-1024.txt").write_text("x")
+    monkeypatch.setattr(gpuq_remote, "BUILD", str(tmp_path))
+    cmd = ["env", f"TFB_WORK={prompts.parent}", "python"]
+    assert gpuq_remote.input_files(cmd, {}, "/remote") == {
+        str(prompts.parent): "/remote/.m3-home/inputs/tfnew"
+    }
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "x86_64\n")
+    assert gpuq_remote.m3_input_refusals(cmd, {}) == []  # directories are not dylibs

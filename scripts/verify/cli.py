@@ -172,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ab.add_argument("--priority", type=int, default=0)
     ab.add_argument(
+        "--device",
+        choices=("m5", "m3"),
+        default="",
+        help="lane for round_profile's cells: m3 = the laptop (a diagnostic, never a speed number)",
+    )
+    ab.add_argument(
         "--detach",
         action="store_true",
         help="return at once; follow with yv status / yv wait",

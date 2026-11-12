@@ -679,16 +679,25 @@ def round_profile_evidence(text: str, mode: str) -> dict:
     if (
         not idle
         or not host
-        or not any(k.startswith(("dflash.", "mtp.")) for r in idle for k in r)
+        or not any(k.startswith(("dflash.", "mtp.", "plain.")) for r in idle for k in r)
     ):
         raise ValueError("missing normal timeline host-gap evidence")
     return {"idle_ms_per_round": idle, "host_ms_per_round": host}
+
+
+def _m3_prompts(argv: list, device: str) -> list:
+    """The laptop cannot see BUILD (an output-only dir there): tfbench's prompts travel as a job input."""
+    if device != "m3":
+        return argv
+    prompts = os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/tfnew")
+    return [argv[0], f"TFB_WORK={prompts}", *argv[1:]]
 
 
 def stage_round_profile(ctx: Ctx) -> StageResult:
     """Candidate-only diagnostics; PASS means complete evidence, never a speed or identity win."""
     cells = []
     keys = []
+    device = ctx.suite.get("device", "")  # "m3": the laptop lane (yv ab --device m3)
     for size in ctx.suite["ctx"]:
         for mode in ("gaps", "stages"):
             key = f"cand-c{size}-{mode}"
@@ -702,20 +711,25 @@ def stage_round_profile(ctx: Ctx) -> StageResult:
                 Cell(
                     "round_profile",
                     key,
-                    _tfbench_argv(
-                        ctx,
-                        "cand",
-                        "round_profile",
-                        key,
-                        _unit_args([size])
-                        + _dec_args(ctx)
-                        + _kind_args(ctx.suite["kinds"], TFBENCH_DEFAULT_KINDS),
-                        env,
+                    _m3_prompts(
+                        _tfbench_argv(
+                            ctx,
+                            "cand",
+                            "round_profile",
+                            key,
+                            _unit_args([size])
+                            + _dec_args(ctx)
+                            + _kind_args(ctx.suite["kinds"], TFBENCH_DEFAULT_KINDS),
+                            env,
+                        ),
+                        device,
                     ),
                     mem_gb=ctx.mem_gb,
-                    timeout_min=15,
+                    timeout_min=30 if device == "m3" else 15,
                     stall_min=6,
-                    quiet=True,
+                    quiet=device
+                    in ("", "m5"),  # gpuq admits --quiet on the M5 lane only
+                    device=device,
                 )
             )
     results = ctx.exe.run_cells(cells)

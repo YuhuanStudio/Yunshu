@@ -88,3 +88,51 @@ def test_stage_builds_separate_nonreplay_timeline_and_census_cells(tmp_path):
         assert "YUNSHU_VLM_DRAFT=mtp" in argv
         assert "--decode-tokens" in argv and "768" in argv
         assert cell.quiet
+
+
+def test_plain_decode_timeline_is_host_gap_evidence():
+    """The draft-off arm times the single-row plain path, whose segments are named plain.*."""
+    text = (
+        "GPU idle by host segment (ms/round, gaps > 20 us): {'plain.readback': 0.1}\n"
+        "Host time by segment (ms/round): {'plain.graph': 0.7}"
+    )
+    r = round_profile_evidence(text, "gaps")
+    assert r["idle_ms_per_round"] == [{"plain.readback": 0.1}]
+
+
+def test_round_profile_device_m3_routes_cells_to_laptop(tmp_path):
+    from verify.stages import stage_round_profile
+
+    class StopError(Exception):
+        pass
+
+    cells = []
+
+    class Executor:
+        def run_cells(self, items):
+            cells.extend(items)
+            raise StopError
+
+    ctx = SimpleNamespace(
+        suite={"ctx": [1024], "kinds": ["prose"], "decode_tokens": 768, "device": "m3"},
+        arm_env=lambda arm: {"YUNSHU_VLM_DRAFT": "off"},
+        tree=lambda arm: SimpleNamespace(path=Path(__file__).resolve().parents[2]),
+        run=SimpleNamespace(path=tmp_path),
+        py="python",
+        model="/model",
+        mem_gb=14,
+        exe=Executor(),
+        observe=False,
+    )
+    with pytest.raises(StopError):
+        stage_round_profile(ctx)
+    assert len(cells) == 2
+    for cell in cells:
+        assert cell.device == "m3"
+        assert not cell.quiet  # gpuq refuses --quiet off the M5 lane
+        assert cell.timeout_min == 30
+        assert (
+            "DYLD_INSERT_LIBRARIES=/Volumes/P5Plus/yunshu-build/metalrt/libmetalrt_trace2.dylib"
+            in cell.argv
+        )
+        assert cell.argv[1] == "TFB_WORK=/Volumes/P5Plus/yunshu-build/tfnew"

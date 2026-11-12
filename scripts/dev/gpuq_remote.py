@@ -198,6 +198,7 @@ def paths(job, repo):
             raise ValueError("model basename collision; use distinct checkpoint names")
         models[source] = dest
     pairs.extend(models.items())
+    pairs.extend(input_files(job["cmd"], job["env"], repo).items())
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
     return top, wt, pairs, {k: v for k, v in models.items() if k in synced}
 
@@ -230,6 +231,49 @@ def model_sources(cmd, env):
                 if key is None or key not in catalogue:
                     synced.add(source)
     return sources, synced
+
+
+# DYLD_* values name interposer dylibs (tfbench passes them as `--env K=V` argv tokens). BUILD maps to
+# an output-only directory on the laptop, so a dylib under BUILD is copied in as a job input instead.
+# TFB_WORK names tfbench's prompt directory (under BUILD too): a directory input, copied whole.
+INPUT_RE = re.compile(r"(?:DYLD_[A-Z_]+|TFB_WORK)=([^\s'\";]+)")
+
+
+def input_files(cmd, env, repo):
+    """{local file or directory under BUILD: laptop path in <repo>/.m3-home/inputs} named by a
+    DYLD_* (dylib) or TFB_WORK (prompt directory) variable."""
+    values = [str(v) for v in cmd] + [
+        f"{k}={v}" for k, v in env.items() if k.startswith(("DYLD_", "TFB_WORK"))
+    ]
+    out = {}
+    for text in values:
+        for match in INPUT_RE.finditer(text):
+            for item in match[1].split(":"):
+                if item.startswith(BUILD + "/") and (
+                    os.path.isfile(item) or os.path.isdir(item)
+                ):
+                    out[item] = repo + "/.m3-home/inputs/" + Path(item).name
+    return out
+
+
+def m3_input_refusals(cmd, env):
+    """Reasons a copied dylib cannot load on the laptop (arm64 is its only architecture)."""
+    reasons = []
+    for source in input_files(cmd, env, ""):
+        if os.path.isdir(source):
+            continue
+        try:
+            archs = subprocess.check_output(
+                ["lipo", "-archs", source], text=True, stderr=subprocess.DEVNULL
+            )
+        except (OSError, subprocess.CalledProcessError):
+            reasons.append(f"{Path(source).name}: not a Mach-O file")
+            continue
+        if "arm64" not in archs.split():
+            reasons.append(
+                f"{Path(source).name}: no arm64 slice ({archs.strip() or 'none'})"
+            )
+    return reasons
 
 
 def refused_m3_models(cmd, env):
@@ -325,7 +369,7 @@ class Remote:
                 f"transport/command exited rc={proc.returncode}: {cmd[0]}"
             )
 
-    def sync(self, source, target, back=False):
+    def sync(self, source, target, back=False, delete=True):
         cmd = [
             "rsync",
             "-a",
@@ -335,7 +379,7 @@ class Remote:
             source,
             target,
         ]
-        if not back:
+        if not back and delete:
             cmd.insert(2, "--delete")
         if back:
             # Cleanup is bounded separately and runs even after cancellation/timeout.
@@ -444,7 +488,7 @@ class Remote:
         rcpath = self.repo + "/.m3-home/gpuq/" + self.job["id"] + ".rc"
         self.call(
             self.ssh_cmd(
-                f"mkdir -p {q(self.repo + '/.m3-home/gpuq')} {q(self.repo + '/.m3-home/models')} {q(self.repo + '/.uv-cache')} {q(self.repo + '/.m3-wt')}"
+                f"mkdir -p {q(self.repo + '/.m3-home/gpuq')} {q(self.repo + '/.m3-home/models')} {q(self.repo + '/.m3-home/inputs')} {q(self.repo + '/.uv-cache')} {q(self.repo + '/.m3-wt')}"
             )
         )
         # Temporary index creates HEAD + tracked edits without touching the stash stack.
@@ -494,6 +538,13 @@ class Remote:
         self.check_space(models)
         for source, dest in models.items():
             self.sync(source + "/", self.host + ":" + dest + "/")
+        for source, dest in input_files(
+            self.job["cmd"], self.job["env"], self.repo
+        ).items():
+            if os.path.isdir(source):
+                self.sync(source + "/", self.host + ":" + dest + "/", delete=False)
+            else:
+                self.sync(source, self.host + ":" + dest, delete=False)
         self.call(
             self.ssh_cmd(
                 f"cd {q(self.repo)} && git worktree add -q --detach {q(wt)} {q(sha)}"
