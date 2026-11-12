@@ -481,7 +481,7 @@
     },
     {
       "kind": "derived",
-      "path": "python/yunshu_engine/kernels/lane_linear.py",
+      "path": "python/yunshu_engine/blocks/linear.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
       "upstream_paths": [
@@ -1865,7 +1865,7 @@
   "patches": [
     {
       "kind": "patches",
-      "path": "python/yunshu_engine/kernels/ragged_kv.py",
+      "path": "python/yunshu_engine/blocks/kv.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
       "package": "mlx-vlm",
@@ -1880,7 +1880,7 @@
     },
     {
       "kind": "patches",
-      "path": "python/yunshu_engine/kernels/ragged_kv.py",
+      "path": "python/yunshu_engine/blocks/kv.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
       "package": "mlx-vlm",
@@ -1895,7 +1895,7 @@
     },
     {
       "kind": "patches",
-      "path": "python/yunshu_engine/kernels/ragged_kv.py",
+      "path": "python/yunshu_engine/blocks/kv.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
       "package": "mlx-vlm",

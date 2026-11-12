@@ -35,9 +35,11 @@ GLOBAL_STATES = (
     "omlx.qwen35_verify_qmm.group_sums",
     "omlx_q4.qwen35_verify_qmm.group_sums",
 )
+# module stems that moved (M3): the registry label of a moved module stays the old name (receipts compare by it)
+STATE_LABEL_OF_STEM = {"kv": "ragged_kv"}
 # module files whose module-level _STATE / _STATS must each appear in GLOBAL_STATES
 STATE_SOURCES = (
-    "kernels/ragged_kv.py",
+    "blocks/kv.py",
     "kernels/batch_invariant.py",
     "kernels/gdn_prefill.py",
     "kernels/lane_linear.py",
@@ -157,8 +159,9 @@ def unregistered_state(root, sources=STATE_SOURCES, registry=GLOBAL_STATES):
     for rel in sources:
         path = Path(root) / rel
         stem = path.stem
+        label = STATE_LABEL_OF_STEM.get(stem, stem)  # a moved module keeps its registry label
         for name in state_globals(path):
-            key = f"{stem}.{name}"
+            key = f"{label}.{name}"
             if key not in registry:
                 missing.add(key)
     return sorted(missing)

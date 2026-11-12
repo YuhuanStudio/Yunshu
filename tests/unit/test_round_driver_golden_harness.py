@@ -410,9 +410,12 @@ def test_registered_state_names_exist_in_their_module():
         for rel in STATE_SOURCES
         for name in state_globals(ENGINE / rel)
     }
+    # the state label keeps its name across M3 (receipts compare by it); the module now lives at blocks/kv.py
+    moved = {"ragged_kv": "kv"}
     for key in GLOBAL_STATES:
-        if key.split(".")[0] in stems and key.endswith(("._STATE", "._STATS")):
-            assert key in found, key
+        stem = key.split(".")[0]
+        if moved.get(stem, stem) in stems and key.endswith(("._STATE", "._STATS")):
+            assert key.replace(stem + ".", moved.get(stem, stem) + ".", 1) in found, key
 
 
 def test_global_state_snapshot_matches_registry_and_is_json_safe():

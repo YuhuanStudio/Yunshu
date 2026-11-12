@@ -360,7 +360,7 @@
       }
     },
     "lane_linear": {
-      "module": "python/yunshu_engine/kernels/lane_linear.py",
+      "module": "python/yunshu_engine/blocks/linear.py",
       "what": "TensorFold row-invariant lane matmul (M5-class tensor ops)",
       "cells": {
         "batch": {
@@ -401,7 +401,7 @@
       }
     },
     "ragged_kv": {
-      "module": "python/yunshu_engine/kernels/ragged_kv.py",
+      "module": "python/yunshu_engine/blocks/kv.py",
       "what": "Per-row-length KV and ragged decode attention (lossless layout)",
       "cells": {
         "batch": {
@@ -432,7 +432,7 @@
       }
     },
     "kv_precision": {
-      "module": "python/yunshu_engine/kernels/ragged_kv.py",
+      "module": "python/yunshu_engine/blocks/kv.py",
       "what": "KV cache precision option (lossy, user setting): VLM YUNSHU_KV_PRECISION vs text YUNSHU_KV_QUANT_BITS",
       "cells": {
         "batch": {
@@ -1028,7 +1028,7 @@
       }
     },
     "fast_top_logprobs": {
-      "module": "python/yunshu_engine/text_logprobs.py",
+      "module": "python/yunshu_engine/blocks/head.py",
       "what": "top_logprobs without a full-vocabulary argsort or per-id syncs (argpartition; one tie order everywhere: descending value, ascending id)",
       "cells": {
         "batch": {
@@ -1815,14 +1815,14 @@
     "python/yunshu_engine/dflash_draft.py": "Quantized DFlash context-KV fusion and the trained-selector greedy readout; unit tested, never installed (quantize_drafter does not call it). Wire or delete after an A/B; only scripts/research/{bench_dflash_precision,profile_dflash_draft}.py and its unit test use it, so it stays until that A/B is recorded.",
     "python/yunshu_engine/dflash_conv.py": "One-dispatch private DFlash convolution candidate; unit tested, never installed. Wire or delete after an A/B; only its unit test uses it, so it stays until that A/B is recorded.",
     "python/yunshu_engine/kernels/verify_select.py": "exact-kernel streamed5 verify select; only research scripts and test_qmv_compat use it since the MTP row-exact path was deleted",
-    "python/yunshu_engine/kernels/gdn_rows.py": "batched GDN recurrence with per-row window lengths, formerly DecodeBatch's state kernel; DecodeBatch now runs tree_verify._gdn_layer per row for one arithmetic with tree_forward (spec on == off), so nothing imports it. Kept as the base of the batched per-row-invariant GDN kernel (PARITY row 23); unit tested (test_gdn_rows). Delete if row 23 does not build on it.",
     "python/yunshu_engine/kernels/qwen4_qsa/attention.py": "Padded batched sparse QSA attention launch (the former stock-path batched decode, deleted with the stock Flash-Next path; driver rows run QSA per row). No caller: kept with its oracle test for the batched-QSA follow-up (bqsa-1028).",
     "python/yunshu_engine/turbo_quant.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
     "python/yunshu_engine/kv_optimizations.py": "unwired: to be re-homed on the round driver (T5 KV quantization rows; plan step T5). Restored from history at T0 correction; no driver caller yet.",
     "python/yunshu_engine/spec_prefill.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
     "python/yunshu_engine/spec_prefill_engine.py": "unwired: to be re-homed on the round driver; NOT in the text-engine plan, needs an owner and a decision (plan T4 is the closest step). Restored from history at T0 correction.",
     "python/yunshu_engine/mtp_tree.py": "MTP draft-tree rounds for mlx-vlm's single-request loop; its install() patch was dead on the round driver and was removed (deadcode-1110). Kept with mtp_lane.rounds / copy_graft / copy_cost for the planned MTP copy-and-graft port to the driver (MAINLINES 11-10); wire or delete after that A/B.",
-    "python/yunshu_engine/round_driver/textlm.py": "T7 text-model adapter for the round driver; routed by line-textdriver-1111 (text models onto the driver), then removed from orphans"
+    "python/yunshu_engine/round_driver/textlm.py": "T7 text-model adapter for the round driver; routed by line-textdriver-1111 (text models onto the driver), then removed from orphans",
+    "python/yunshu_engine/kernels/gdn_rows.py": "alias of blocks/recurrent.py (M3c): nothing in the package imports the old name; kept for test_gdn_rows"
   },
   "modules_other": {
     "python/yunshu_engine/kernels/gdn_qk_eps.py": "GDN q/k RMS epsilon measured from the installed mlx-vlm and rendered into gdn_prefill._NORM_SCALE_SOURCE and the RMS arm of qwen35_gdn_prework, so a mlx-vlm bump (b8bf04c) flips stock and fused together (value unchanged on 0.7.8)",
@@ -1851,9 +1851,12 @@
     "python/yunshu_engine/ngram_proposer.py": "text n-gram (proposers duplicate group)",
     "python/yunshu_engine/suffix_proposer.py": "text suffix proposer (proposers duplicate group)",
     "python/yunshu_engine/kernels/batch_invariant.py": "batch_invariant_kernels",
-    "python/yunshu_engine/kernels/lane_linear.py": "lane_linear",
+    "python/yunshu_engine/blocks/linear.py": "lane_linear",
+    "python/yunshu_engine/kernels/lane_linear.py": "alias of blocks/linear.py (M3 move; old import path)",
     "python/yunshu_engine/kernels/lane_layers.py": "lane_layers",
-    "python/yunshu_engine/kernels/ragged_kv.py": "ragged_kv",
+    "python/yunshu_engine/blocks/kv.py": "ragged_kv",
+    "python/yunshu_engine/kernels/ragged_kv.py": "alias of blocks/kv.py (M3 move; old import path)",
+    "python/yunshu_engine/text_logprobs.py": "alias of blocks/head.py (M3 move; old import path)",
     "python/yunshu_engine/kernels/ragged_attention.py": "ragged_kv",
     "python/yunshu_engine/kernels/nax_prefill.py": "prefill_kernels",
     "python/yunshu_engine/kernels/gdn_prefill.py": "prefill_kernels",
@@ -1896,7 +1899,7 @@
     "python/yunshu_engine/kernels/int8_tile.py": "int8 KV tree-attention tile and fused kernels for the round driver (kv_precision row); installed by RoundDriver when YUNSHU_KV_PRECISION=int8 and the tile kernel runs.",
     "python/yunshu_engine/qwen4_dflash.py": "Flash-Next mixed layer capture adapter on its existing invariant forward; qwen4 native MTP retains full hyper-state.",
     "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention.",
-    "python/yunshu_engine/kernels/gdn_rows.py": "batched GDN rows kernel (orphan, see orphans)",
+    "python/yunshu_engine/blocks/recurrent.py": "batched GDN recurrence with per-row window lengths, formerly DecodeBatch's state kernel; DecodeBatch now runs tree_verify._gdn_layer per row for one arithmetic with tree_forward (spec on == off), so nothing imports it. Kept as the base of the batched per-row-invariant GDN kernel (PARITY row 23); unit tested (test_gdn_rows). Delete if row 23 does not build on it.",
     "python/yunshu_engine/round_driver": "RoundDriver package (driver cells); verify.native_chain_forward is an unadmitted Flash-Next HC/QSA/PLE/MoE primitive pending native MTP lifecycle gates",
     "python/yunshu_engine/kernels/omlx_q4/module_cache.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
     "python/yunshu_engine/kernels/omlx_q4/moe_verify_gather.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
