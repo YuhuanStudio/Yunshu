@@ -957,3 +957,35 @@ def test_other_repo_paths_do_not_refuse(queue, checkouts, tmp_path, monkeypatch)
     jid = queue.submit(["true", str(other / "b.py")], "other", 1, 0, device="any")
     row = queue._read(queue.JOBS / (jid + ".json"))
     assert row["m3_refused"] == []
+
+
+def test_verify_tree_job_may_name_the_main_checkout_harness(monkeypatch):
+    """yv runs its harness (scripts/) from the main checkout and the engine from the verify tree;
+    the laptop keeps its own main checkout at that path. The 2026-11-12 refusal rule rejected
+    every yv --device m3 run ('scripts/dev/.. is in <main>, not the job's source tree')."""
+    import gpuq_remote
+
+    main = str(Path(gpuq_remote.__file__).resolve().parents[2])
+    tree = gpuq_remote.BUILD + "/verify/trees/abc123"
+    common = "/common/.git"
+    tops = {main: (main, common), tree: (tree, common)}
+
+    def checkout(path, cache):
+        for top, found in tops.items():
+            if path == top or path.startswith(top + "/"):
+                return found
+        return None
+
+    monkeypatch.setattr(gpuq_remote, "_checkout", checkout)
+    monkeypatch.setattr(gpuq_remote, "_tracked", lambda src, path: True)
+    cmd = [
+        f"{main}/.venv/bin/python",
+        f"{main}/scripts/dev/yv_stage.py",
+        f"{tree}/python",
+    ]
+    env = {"PYTHONPATH": f"{main}/scripts/dev/..:{tree}/python"}
+    assert gpuq_remote.source_tree_refusals(cmd, env, main) == []
+    # a second checkout that is neither the main one nor the job's tree still refuses
+    other = "/Volumes/P5Plus/yunshu-build/wt-x"
+    tops[other] = (other, common)
+    assert gpuq_remote.source_tree_refusals(cmd + [f"{other}/a.py"], env, main)

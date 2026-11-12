@@ -219,7 +219,9 @@ def source_tree_refusals(cmd, env, cwd):
     src = home[0] if home else None
     # Only checkouts of this repo count: other repos named in a job (Homebrew, a plugin) are not
     # source the laptop copies. Without a checkout at cwd, this repo is the one gpuq lives in.
-    own = (home or _checkout(str(Path(__file__).resolve().parent), cache))[1]
+    main = _checkout(str(Path(__file__).resolve().parent), cache)
+    main_top = main[0] if main else None
+    own = (home or main)[1]
     texts = [str(v) for v in cmd] + [
         str(v) for k, v in env.items() if k not in UNSYNCED_ENV
     ]
@@ -234,6 +236,10 @@ def source_tree_refusals(cmd, env, cwd):
             if found is None or found[1] != own:
                 continue
             top = found[0]
+            if trees and top == main_top:
+                # yv runs its harness (scripts/) from the main checkout and the engine from the
+                # verify tree; the laptop keeps its own copy of the main checkout at that path
+                continue
             if top != src:
                 reasons.append(f"{path} is in {top}, not the job's source tree {src}")
             elif os.path.exists(path) and not _tracked(src, path):
