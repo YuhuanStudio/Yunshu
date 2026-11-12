@@ -376,7 +376,7 @@ class DecodeBatch:
             row.cache = None
         self.rows.extend(rows)
 
-    def restore(self, row: Any) -> None:
+    def cut_out(self, row: Any) -> None:
         """Give ``row`` its own cache back (cut out of the slots / state lists, copied) before it leaves:
         the layout its prefill had (bf16 ``KVCache`` / int8 ``Int8KVCache`` per attention layer, the
         model's GDN cache objects), holding ``row.n`` positions."""

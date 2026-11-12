@@ -188,3 +188,14 @@ def test_c6_caps_and_hooks_match_the_census(
     assert GenericLayer(generic_lm).apc_suffix() == ":resume-rope-v2"
     monkeypatch.setenv("YUNSHU_JUMP_FORWARD", "1")
     assert GenericLayer(generic_lm).apc_suffix() == ":resume-rope-v2:jump-forward"
+
+
+def test_c7_release_cut_out_is_the_decode_set_method():
+    from yunshu_engine.round_driver.batch import DecodeBatch
+    from yunshu_engine.round_driver.generic import GenericBatch
+
+    # M1 C7: the release path calls cut_out on the decode set; only packed layers take the slot cut-out
+    assert callable(DecodeBatch.cut_out) and callable(GenericBatch.cut_out)
+    assert not hasattr(DecodeBatch, "restore") and not hasattr(GenericBatch, "restore")
+    assert PackedLayer.caps.slot_decode and not GenericLayer.caps.slot_decode
+    assert not FlashNextLayer.caps.slot_decode

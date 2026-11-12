@@ -244,7 +244,7 @@ class GenericBatch:
             r.slot = None
         self.rows = [r for r in self.rows if id(r) not in ids]
 
-    def restore(self, row: Any) -> None:
+    def cut_out(self, row: Any) -> None:
         """Rows keep their own caches; nothing to give back."""
 
     @property

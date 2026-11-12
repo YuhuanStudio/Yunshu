@@ -123,7 +123,7 @@ def test_int8_followup_suffix_logits_match_a_cold_bf16_forward(tiny):
             row
         ) in d.rows:  # cut the row's own cache out of the batch (a copy), keep decoding
             if row.slot is not None and row.cache is None:
-                d.batch.restore(row)
+                d.batch.cut_out(row)
                 held[:] = [(list(row.cache), list(row.context))]
                 row.cache = None
     assert held, "no row cache was cut out"

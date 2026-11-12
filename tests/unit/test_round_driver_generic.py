@@ -558,7 +558,7 @@ def test_rows_keep_their_own_caches_and_leave_drops_only_that_row():
     batch.join([a, b])
     assert a.cache is not None and b.cache is not None
     assert batch.cache[0].keys.shape[0] == 1
-    batch.restore(b)
+    batch.cut_out(b)
     assert b.cache[0].offset == 12
     assert mx.allclose(
         b.cache[0].keys[..., :12, :], want.cache[0].keys[..., :12, :]

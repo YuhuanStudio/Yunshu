@@ -979,7 +979,7 @@ class RoundDriver:
                     r.generated,
                 )
         if (
-            self.generic
+            not self.layer.caps.per_token_rows  # generic: its cut_out is a no-op (rows keep their caches)
             and len(gone) == 1
             and not self.rows
             and gone[0].slot is not None
@@ -988,9 +988,10 @@ class RoundDriver:
             and self.finish_hook is not None
         ):
             # the last row leaves a batch cache: cut its own cache out so the reply can be stored
-            self.batch.restore(gone[0])
+            self.batch.cut_out(gone[0])
         if (
-            type(self.batch) is DecodeBatch
+            self.layer.caps.slot_decode  # exact type: DFlash batches (DecodeBatch subclasses) keep their own path
+            and type(self.batch) is DecodeBatch
             and len(gone) == 1
             and not self.rows
             and gone[0].slot is not None
@@ -1005,7 +1006,7 @@ class RoundDriver:
             # before they are released, so the reply is stored like a DFlash-batch row's
             row = gone[0]
             try:
-                self.batch.restore(row)
+                self.batch.cut_out(row)
                 if self.head is not None and row.drafting and row.hslot is not None:
                     row.head_cache = self.head.restore(row)
             except Exception:
