@@ -1054,7 +1054,7 @@
           "ev": [
             [
               "python/yunshu_engine/engine_fast.py",
-              "text_logprobs"
+              "blocks.head import top_logprobs"
             ]
           ]
         }
