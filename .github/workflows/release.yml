@@ -1,7 +1,7 @@
 name: Release
 
 # Runs only when a maintainer pushes a version tag (vX.Y.Z) by hand; see
-# RELEASING.md. Publishing waits for approval on the `pypi` environment.
+# RELEASING.md. Publishing uses the `pypi` environment (trusted publishing, no approval step).
 on:
   push:
     # vX.Y.Z: a patch release (full gate); vX.Y.Z.devN: a dev release, every other push

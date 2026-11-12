@@ -11,8 +11,9 @@ maintainer.
    - workflow `release.yml`, environment `pypi`
 
    No API token is stored anywhere.
-2. **GitHub environment.** Create an environment named `pypi` under the repository settings and
-   add yourself as a required reviewer. Every publish then waits for your approval.
+2. **GitHub environment.** Create an environment named `pypi` under the repository settings, with no
+   required reviewers: a pushed tag publishes without a manual approval step (trusted publishing
+   needs the environment name only).
 
 ## Cut a release
 
@@ -57,7 +58,7 @@ The release workflow then does the following:
 1. Checks that the tag matches `pyproject.toml` and that `CHANGELOG.md` has an entry for the tagged version.
 2. Runs ruff, mypy, console type checks/tests/build and the unit tests on an Apple Silicon runner.
 3. Builds the sdist and wheel, runs `twine check`, and installs the wheel into a clean tool env.
-4. Waits for approval on the `pypi` environment, then publishes to PyPI.
+4. Publishes to PyPI through the `pypi` environment (trusted publishing, no approval step).
 5. Opens a **draft** GitHub release with the changelog section as its notes. Review the draft and
    publish it. Publishing the release also runs the macOS unit-test job in `ci.yml`.
 
