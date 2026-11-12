@@ -48,6 +48,11 @@ scripts/dev/gpuq submit --label lint --serving-ok -- python cpu_job.py  # bypass
 scripts/dev/gpuq submit --label x-smoke --timeout 5 -- python smoke.py  # short lane (see below)
 ```
 
+Submit-time refusals (nothing is queued): a label containing whitespace; an argv element with whitespace that looks
+like several arguments (one part starts with `-` or `/`, a part is purely numeric, or every part is an existing path),
+e.g. `--engine "yunshu-tf4 1024"` from an unsplit `$VAR` under zsh. Prompts such as `"hello world"` pass.
+`--allow-spaced-args` submits such an element as one argument on purpose.
+
 ## Submit labels and bounded waits
 
 An active label (pending, running, or paused) is exclusive. Concurrent submissions with the same active label

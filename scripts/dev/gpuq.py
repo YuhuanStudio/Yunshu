@@ -1001,7 +1001,15 @@ def submit(
     gate: bool = False,
     short: bool = False,
     precheck: str | None = None,
+    allow_spaced_args: bool = False,
 ) -> str:
+    # Refused before anything is queued: a label is one token, and an argv element that is several
+    # arguments glued together (zsh does not word-split $VAR) fails in 0 s after its queue wait.
+    refusals = gpuq_preflight.label_problems(label)
+    if not allow_spaced_args:
+        refusals += gpuq_preflight.spaced_arg_problems(cmd, os.getcwd())
+    if refusals:
+        raise ValueError("refused:\n  - " + "\n  - ".join(refusals))
     if short:
         timeout_min = min(timeout_min, SHORT_MIN)
     if device not in {"m5", "m3", "any"}:
@@ -2390,6 +2398,11 @@ def main() -> int:
             type=float,
             help="maximum CPU wait seconds (default 300)",
         )
+        p.add_argument(
+            "--allow-spaced-args",
+            action="store_true",
+            help="submit an argv element that contains whitespace and looks like several arguments as one argument (default: refused)",
+        )
         p.add_argument("cmd", nargs=argparse.REMAINDER)
     wp = sub.add_parser("wait")
     wp.add_argument(
@@ -2449,6 +2462,7 @@ def main() -> int:
                 gate=a.gate,
                 short=a.short,
                 precheck=a.precheck,
+                allow_spaced_args=a.allow_spaced_args,
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)

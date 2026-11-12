@@ -206,6 +206,48 @@ def preflight(cmd: list[str], cwd: str, env: dict[str, str]) -> list[str]:
     return problems
 
 
+def label_problems(label: str) -> list[str]:
+    """A job label is one token: it names the job id and is typed into gpuq reprioritize/status."""
+    if any(c.isspace() for c in label):
+        return [
+            f"label {label!r} contains whitespace; a label is one token (use '-' between words)"
+        ]
+    return []
+
+
+_SPACED_OPTION_OR_NUMBER = re.compile(r"^[-/]|^\d+$")
+_SCRIPT_FLAGS = {"-c", "-lc", "-ec", "-ic", "-xc"}
+_SHELL_TOKENS = ("&&", "||", ";", "|", "\n", "$(", "`", ">")
+
+
+def spaced_arg_problems(cmd: list[str], cwd: str) -> list[str]:
+    """argv elements that look like several arguments glued into one. zsh does not word-split
+    $VAR, so ``--engine "$ENG"`` with ENG="yunshu-tf4 1024" reaches the job as one argument.
+    Flagged only when the element has whitespace AND either (a) one of its parts starts with
+    ``-`` or ``/`` or is purely numeric, or (b) every part names an existing path. Anything else
+    (a prompt such as "hello world", an env assignment KEY=a b) is allowed. Escape: --allow-spaced-args."""
+    problems: list[str] = []
+    for i, a in enumerate(cmd):
+        parts = a.split()
+        if len(parts) < 2 or not any(c.isspace() for c in a) or _ASSIGN.match(a):
+            continue
+        # a script handed to an interpreter (bash -c / -lc, python -c) or any shell command line
+        if (i and cmd[i - 1] in _SCRIPT_FLAGS) or any(t in a for t in _SHELL_TOKENS):
+            continue
+        glued = any(_SPACED_OPTION_OR_NUMBER.search(p) for p in parts)
+        paths = all(
+            os.path.exists(p if os.path.isabs(p) else os.path.join(cwd, p))
+            for p in parts
+        )
+        if glued or paths:
+            problems.append(
+                f"argv element {a!r} contains whitespace and looks like several arguments; "
+                "zsh does not word-split $VAR; pass separate arguments or use ${=VAR} "
+                "(--allow-spaced-args submits it as one argument)"
+            )
+    return problems
+
+
 _OUT_FLAGS = ("--out", "--output", "--out-dir", "--outdir", "--log")
 
 
