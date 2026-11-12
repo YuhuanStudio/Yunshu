@@ -154,7 +154,7 @@ class PackedLayer:
         self.lm = lm
 
     def new_cache(self) -> list:
-        return self.lm.make_cache()  # driver.py:585 (_new_cache)
+        return cast(list, self.lm.make_cache())  # driver.py:585 (_new_cache)
 
     def logits(self, hidden: mx.array) -> mx.array:
         return forward.logits(self.lm, hidden)  # driver.py:576-581
@@ -262,8 +262,11 @@ class PackedLayer:
         capture_ids: Any = (),
         captured: list | None = None,
     ) -> mx.array | None:
-        return forward.lane_forward(
-            self.lm, seg, capture_ids=capture_ids, captured=captured
+        return cast(
+            mx.array | None,
+            forward.lane_forward(
+                self.lm, seg, capture_ids=capture_ids, captured=captured
+            ),
         )
 
 
@@ -309,7 +312,7 @@ class FlashNextLayer:
         self.lm = lm
 
     def new_cache(self) -> list:
-        return self.lm.make_cache()  # driver.py:585 (_new_cache)
+        return cast(list, self.lm.make_cache())  # driver.py:585 (_new_cache)
 
     def logits(self, hidden: mx.array) -> mx.array:
         return flashnext.logits(self.lm, hidden)  # driver.py:576-581
@@ -490,7 +493,7 @@ class GenericLayer:
 class LayerRegistry:
     """Layers in selection order: the first whose ``supports`` holds serves the model."""
 
-    layers: tuple[type, ...] = (FlashNextLayer, PackedLayer, GenericLayer)
+    layers: tuple[type[Any], ...] = (FlashNextLayer, PackedLayer, GenericLayer)
 
     def select(self, model: Any) -> Any:
         # the driver's own rule for the language model (driver.py: ``model.language_model`` if present)

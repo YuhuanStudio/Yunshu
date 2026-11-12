@@ -6,7 +6,7 @@ from typing import cast
 
 import mlx.core as mx
 
-from ..text_logprobs import top_logprobs_rows
+from ..blocks.head import top_logprobs_rows
 
 
 def score_span(row, start: int, logits: mx.array) -> None:

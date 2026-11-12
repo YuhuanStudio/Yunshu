@@ -32,8 +32,8 @@ from typing import Any, cast
 import mlx.core as mx
 import numpy as np
 
+from ..blocks.kv import _scatter_rows
 from ..kernels import ragged_attention as ra
-from ..kernels.ragged_kv import _scatter_rows
 from .decode_set import DecodeSet
 
 CAP_STEP = 512  # key capacity granularity (a multiple of the tile's 64)

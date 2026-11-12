@@ -40,8 +40,8 @@ from typing import Any, cast
 import mlx.core as mx
 
 from . import gpu_window
+from .blocks import kv as ragged_kv
 from .kernels import ragged_attention as ra
-from .kernels import ragged_kv
 from .kernels.omlx import qwen35_gdn_prework as gp
 from .kernels.omlx import qwen35_gdn_verify_fused as gv
 from .kernels.omlx import qwen35_verify_qmm as vq
@@ -518,7 +518,7 @@ def _gdn_layer(
         )
         rows = (k, v, a, b)
     z = z.reshape(1, w, hv, dv)
-    from .kernels import lane_linear
+    from .blocks import linear as lane_linear
 
     if (
         getattr(shape, "fast_glue", False)
@@ -1063,7 +1063,7 @@ def _add_rms(shape, h, r, norm):
     """Residual add + RMSNorm. The fast tree's lane projections take their
     input group sums from the norm kernel, which saves one launch per norm."""
     from . import tree_glue
-    from .kernels import lane_linear
+    from .blocks import linear as lane_linear
 
     if (
         getattr(shape, "fast_glue", False)
@@ -1218,7 +1218,7 @@ def lane_projections(lm: Any) -> bool:
     """
     import mlx.nn as nn
 
-    from .kernels.lane_linear import LaneLinear
+    from .blocks.linear import LaneLinear
 
     if getattr(lm, "_yunshu_lane_skipped", 0):
         return False

@@ -67,7 +67,7 @@ def live_eligible(context, generated=0):
 
 def context_length(lm, cache):
     """Committed positions in the live target KV, including restored APC state."""
-    from .kernels import ragged_kv
+    from .blocks import kv as ragged_kv
 
     index = getattr(getattr(lm, "model", None), "fa_idx", None)
     if index is None or not 0 <= index < len(cache):
@@ -458,7 +458,7 @@ class PrivateProjections:
 
         import mlx.nn as nn
 
-        from .kernels import lane_linear
+        from .blocks import linear as lane_linear
 
         self.bindings = []
         pending = []
@@ -599,12 +599,12 @@ def rounds(
 
     from . import dflash_tree as dt
     from . import mtp_lane
+    from .blocks import linear as lane_linear
     from .constrained_spec import current_request, tree_ban, tree_penalty
     from .copy_drafter import CopyDrafter
     from .copy_graft import GraftBudget, longest_verified_path, plan_tree_graft
     from .dflash_context import context_window
     from .dflash_plan import FastShape, graft_copy, remap_landed, reorder, search_tree
-    from .kernels import lane_linear
     from .keyed_sampling import KeyedSampler, tree_target_rows
     from .spec_metrics import record as _record_speculative_round
     from .spec_schedule import NodeBudget
@@ -1223,8 +1223,8 @@ def supported(lm, draft):
 
 
 def _supported(lm, draft):
+    from .blocks.linear import LaneLinear
     from .dflash_context import context_window
-    from .kernels.lane_linear import LaneLinear
     from .kernels.tensorfold import lane_qmm
 
     if (

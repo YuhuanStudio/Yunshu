@@ -19,9 +19,9 @@ import logging
 
 import mlx.core as mx
 
+from ..blocks import linear as _ll
+from ..blocks.linear import LaneLinear
 from . import gdn_prefill
-from . import lane_linear as _ll
-from .lane_linear import LaneLinear
 from .tensorfold import lane_qmm as q
 
 logger = logging.getLogger(__name__)

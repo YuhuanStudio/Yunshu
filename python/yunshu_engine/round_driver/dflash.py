@@ -22,12 +22,12 @@ from .. import (
     settings,
     tree_verify,
 )
+from ..blocks.head import top_logprobs_device
 from ..constrained_spec import masks_every_row
 from ..copy_drafter import CopyDrafter
 from ..dflash_context import context_window
 from ..dflash_fast import Verifier, pack_readback, prepare, unpack_readback
 from ..dflash_plan import FastShape, remap_landed, reorder, search_tree
-from ..text_logprobs import top_logprobs_device
 from .allocate import dflash_room, fair_nodes
 from .decode_set import DecodeSet
 from .forward import logits
@@ -229,7 +229,7 @@ class DFlashBatch(DecodeSet):
         return arrays
 
     def step(self, driver) -> list[Event]:
-        from ..kernels import lane_linear
+        from ..blocks import linear as lane_linear
 
         previous = lane_linear.sum_reuse_enabled()
         lane_linear.set_sum_reuse(True)

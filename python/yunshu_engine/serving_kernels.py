@@ -39,7 +39,8 @@ def install(
     is the lane count VLMEngine converted before the drafter loaded (a second convert then finds
     them in place). ``block`` is the MTP block size; the Qwen4 lane and the drafter may change it.
     """
-    from .kernels import attn_prefill, gdn_prefill, lane_linear, nax_prefill, sdpa_chunk
+    from .blocks import linear as lane_linear
+    from .kernels import attn_prefill, gdn_prefill, nax_prefill, sdpa_chunk
 
     lm = model.language_model
     qwen4 = is_qwen4_family(config)
@@ -75,7 +76,7 @@ def install(
         from .kernels.tensorfold.lane_qmm import ready
 
         if ready():
-            from .kernels import lane_linear
+            from .blocks import linear as lane_linear
 
             # (a second convert finds the driver's lanes already in place)
             kernels["lane_linear"] = (

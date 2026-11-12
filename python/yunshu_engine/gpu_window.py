@@ -91,7 +91,7 @@ def _is_stall(gap: float, gaps: list) -> bool:
     """A gap far above the window's own median round time (a prefill, a stall), not a slow round."""
     if len(gaps) < STALL_MIN_HISTORY or gap <= STALL_MIN_S:
         return False
-    return gap > STALL_X * statistics.median(gaps)
+    return bool(gap > STALL_X * statistics.median(gaps))
 
 
 def boundary(name: str) -> None:

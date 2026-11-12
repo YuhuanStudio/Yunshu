@@ -603,7 +603,7 @@ class SpecRequest:
         k = min(self.top_logprobs, probs.shape[-1])
         if k:
             # Match AR ordering, including ties; reduce only committed rows.
-            from .text_logprobs import top_logprobs_rows
+            from .blocks.head import top_logprobs_rows
 
             top_ids, top_vals = top_logprobs_rows(probs, k)
         else:

@@ -67,7 +67,7 @@ def set_context(ids: Any) -> None:
     copy drafter indexes all of them, however much of the prompt a prefix-cache
     hit skipped."""
     _STATE["context"] = ids
-    from .kernels import lane_linear
+    from .blocks import linear as lane_linear
 
     lane_linear.set_sum_context(ids)
 
@@ -135,7 +135,7 @@ def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
     layers = getattr(getattr(language_model, "model", None), "layers", None)
     if not layers:  # unknown projection geometry keeps the conservative bound
         return min(rows, 8)
-    from .kernels.lane_linear import LaneLinear
+    from .blocks.linear import LaneLinear
 
     layer = layers[0]
     projection = (

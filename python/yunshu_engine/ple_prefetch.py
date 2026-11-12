@@ -353,7 +353,7 @@ def attach(lm) -> PLEPrefetch | None:
         or table.cache_rows
     ):
         return None
-    existing = table.__dict__.get("_yunshu_prefetch")
+    existing: PLEPrefetch | None = table.__dict__.get("_yunshu_prefetch")
     if existing is not None:
         return existing
     return PLEPrefetch(table, params_from_module(mod))

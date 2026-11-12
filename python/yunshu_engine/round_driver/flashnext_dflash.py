@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING, cast
 import mlx.core as mx
 
 from .. import dflash_ring, dflash_tree, keyed_sampling
+from ..blocks.head import top_logprobs_device
 from ..constrained_spec import masks_every_row
 from ..spec_schedule import CHAIN_PRIOR, NodeBudget
-from ..text_logprobs import top_logprobs_device
 from . import flashnext
 from .allocate import fair_nodes
 from .dflash import DFlashBatch, _plain_guided

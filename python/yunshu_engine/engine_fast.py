@@ -1104,7 +1104,7 @@ class EngineFastMixin:
                             log_probs,
                         )
                         if top_logprobs and top_logprobs > 0:
-                            from .text_logprobs import top_logprobs as _top_lp
+                            from .blocks.head import top_logprobs as _top_lp
 
                             tok_lp, _top_ids, _top_vals = _top_lp(
                                 log_probs, top_logprobs, token

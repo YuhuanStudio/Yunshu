@@ -192,8 +192,8 @@ def _fuse_context_kv(drafter: Any):
     mx.eval(stacked.parameters())
     # the fast tree's drafter projections run as split-K lane kernels (dflash_fast
     # .PrivateProjections); the stacked context projection reads the same way
+    from .blocks import linear as lane_linear
     from .dflash_fast import draft_split_k
-    from .kernels import lane_linear
 
     if lane_linear.eligible(stacked):
         lane = lane_linear.LaneLinear.from_quantized(stacked)

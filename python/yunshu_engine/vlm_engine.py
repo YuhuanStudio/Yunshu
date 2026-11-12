@@ -2322,7 +2322,7 @@ class VLMEngine:
     def _prefill_kernel_id(self) -> str:
         """The arithmetic of prefill chunks (``lane_linear.prefill_kernel_id``) when the lane
         projections serve this model's prefill, else ``"stock"``."""
-        from .kernels import lane_linear
+        from .blocks import linear as lane_linear
 
         model = getattr(self, "_model", None)
         lm = getattr(model, "language_model", None)
@@ -2586,7 +2586,7 @@ class VLMEngine:
         from .kernels import attn_prefill
 
         attn_prefill.disable()
-        from .kernels import lane_linear as lane_sum_policy
+        from .blocks import linear as lane_sum_policy
 
         lane_sum_policy.configure_sum_policy(False)
 
@@ -2637,7 +2637,7 @@ class VLMEngine:
             # Row-invariant lane projections everywhere (before any verify
             # kernel install repacks them): the round driver's rows, and the
             # upstream paths that still serve image prompts, both use them.
-            from .kernels import lane_linear
+            from .blocks import linear as lane_linear
 
             lanes = lane_linear.convert(lm)
             driver_lanes = lanes["converted"]
@@ -2913,7 +2913,7 @@ class VLMEngine:
         # qwen3_5 attention (lossless; measured 2026-09-29).
         # KV precision is the user's memory/quality choice.
         precision = settings.get("YUNSHU_KV_PRECISION")
-        from .kernels import ragged_kv
+        from .blocks import kv as ragged_kv
 
         if use_driver and not qwen4 and ragged_kv.supports(self._model.language_model):
             ragged_kv.install()
@@ -3455,9 +3455,10 @@ class VLMEngine:
         or None for a chat prompt."""
         if not kwargs.get("raw_prompt"):
             return None
-        if len(messages) != 1 or not isinstance(messages[0].get("content"), str):
+        content = messages[0].get("content") if len(messages) == 1 else None
+        if not isinstance(content, str):
             raise ValueError("raw_prompt needs exactly one string prompt")
-        return messages[0]["content"]
+        return content
 
     def _runner_input(
         self,
@@ -3472,8 +3473,8 @@ class VLMEngine:
         thread. Returns ``(token_ids, prompt_kwargs, apc_semantic_hash)``."""
         if raw_text is not None:
             # Raw completion: tokenize the string exactly as the text engines do.
-            ids = EngineTemplatesMixin._encode_prompt(self._tokenizer, raw_text)
-            return self._non_empty_ids(list(ids)), None, None
+            raw_ids = EngineTemplatesMixin._encode_prompt(self._tokenizer, raw_text)
+            return self._non_empty_ids(list(raw_ids)), None, None
         if image_paths or audio_paths:
             prompt = self._apply_vlm_template_with_cache(
                 messages,

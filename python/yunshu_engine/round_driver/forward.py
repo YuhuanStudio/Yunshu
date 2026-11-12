@@ -307,7 +307,7 @@ def _dense_lane_tail(seg: Segment):
     if not 1 <= seg.length <= DENSE_LANE_ROWS:
         yield
         return
-    from ..kernels import ragged_kv
+    from ..blocks import kv as ragged_kv
 
     previous = ragged_kv.dense_lane_active()
     ragged_kv.set_dense_lane(True)

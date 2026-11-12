@@ -724,7 +724,7 @@ class EngineStreamMixin:
                             _lp_logits, axis=-1, keepdims=True
                         )
                         if top_logprobs and top_logprobs > 0:
-                            from .text_logprobs import top_logprobs as _top_lp
+                            from .blocks.head import top_logprobs as _top_lp
 
                             _tok_lp, _top_ids, _top_vals = _top_lp(
                                 _log_probs, top_logprobs, token

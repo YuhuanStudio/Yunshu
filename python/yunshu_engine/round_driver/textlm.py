@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -76,7 +76,7 @@ class TextLM:
         keep = kwargs.get("logits_to_keep")
         if keep is not None:
             logits = logits[:, -int(keep) :]
-        return logits
+        return cast(mx.array, logits)
 
 
 class TextModelAdapter:

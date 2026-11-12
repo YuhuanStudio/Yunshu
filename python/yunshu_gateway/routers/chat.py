@@ -2894,9 +2894,12 @@ async def _handle_vlm_chat(
         if err is not None and err.startswith("[prompt_too_long] "):
             from yunshu_engine.memory_admission import memory_limit_error
 
+            refusal = memory_limit_error(err)
+            # the prefix check above is the same mark memory_limit_error answers, so it is never None
+            assert refusal is not None
             return JSONResponse(
                 status_code=400,
-                content=openai_prompt_too_long(memory_limit_error(err)),
+                content=openai_prompt_too_long(refusal),
             )
         if err is not None and err.startswith("memory_limit: "):
             return JSONResponse(

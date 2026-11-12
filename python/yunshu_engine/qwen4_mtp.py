@@ -82,7 +82,7 @@ def lane_projections(lm: Any, *, head: bool, group: bool = True) -> dict:
     drafting all run through these modules, so speculative output equals plain decode. ``head`` also converts
     the LM head (used when upstream's fused head kernel does not take the checkpoint's head format).
     Calls wider than STOCK_ROWS (prefill chunks) run MLX's quantized matmul on a transient stock-layout copy."""
-    from .kernels import lane_linear
+    from .blocks import linear as lane_linear
     from .kernels.tensorfold import lane_qmm
 
     if not hasattr(lm, "named_modules") or not lane_qmm.ready():
@@ -113,7 +113,7 @@ def adapt_head(lm: Any) -> bool:
     head = getattr(lm, "lm_head", None)
     if not isinstance(head, nn.QuantizedLinear) or supports_optimized_affine_head(head):
         return False
-    from .kernels import lane_linear
+    from .blocks import linear as lane_linear
 
     if not lane_linear.eligible(head):
         return False

@@ -50,6 +50,7 @@ import mlx.core as mx
 import numpy as np
 
 from .. import fn_ttft, hit_stages, keyed_sampling, ple_prefetch
+from ..blocks.head import top_logprobs_device
 from ..cache_prefill import reserve_prompt_kv
 from ..constraint_eos import GrammarDeadEndError
 from ..kernels import preempt
@@ -60,7 +61,6 @@ from ..serving.work_scheduler import (
     DECODE_FIRST_BURST_S,
     decode_quantum,
 )
-from ..text_logprobs import top_logprobs_device
 from . import flashnext, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
@@ -567,10 +567,10 @@ class RoundDriver:
 
     def _logits(self, hidden: mx.array) -> mx.array:
         """Logits of the target's hidden rows (Flash-Next: HC states through the mixer and the head)."""
-        return self.layer.logits(hidden)
+        return cast(mx.array, self.layer.logits(hidden))
 
     def _new_cache(self) -> list:
-        return self.layer.new_cache()
+        return cast(list, self.layer.new_cache())
 
     # ── rows ─────────────────────────────────────────────────────────────
     def add(self, req: Request) -> int:
