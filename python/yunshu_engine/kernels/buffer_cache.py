@@ -164,6 +164,7 @@ def clear_if_over() -> None:
     """Boundary compatibility hook: the allocator reclaims a positive pool."""
     limit = _STATE["limit"]
     if limit <= 0:
+        mx.synchronize()
         mx.clear_cache()
 
 

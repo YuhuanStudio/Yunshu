@@ -41,6 +41,10 @@ MAX_WINDOW = 8  # the tile kernel's token window
 DECODE_GROWTH = 2048  # most keys a slot buffer grows by at once (tree_verify.DECODE_STEP_CAP's headroom)
 
 
+# Non-bf16 attention calls (MTP heads kept in fp16 / fp32): counted so the path's reach is measurable.
+FALLBACK_HITS = [0]
+
+
 def _round_cap(n: int) -> int:
     return -(-max(int(n), 1) // CAP_STEP) * CAP_STEP
 
@@ -303,8 +307,10 @@ def attend(
         # fp16/fp32 weights; keep their arithmetic instead of rounding to bf16.
         stored_k, stored_v = slots.k[i], slots.v[i]
         assert stored_k is not None and stored_v is not None
-        ks = mx.take(stored_k, plan.slot_ids, axis=0)[..., : plan.max_length, :]
-        vs = mx.take(stored_v, plan.slot_ids, axis=0)[..., : plan.max_length, :]
+        FALLBACK_HITS[0] += 1
+        # slice before the gather: take on the whole CAP row copied the unused keys too
+        ks = mx.take(stored_k[..., : plan.max_length, :], plan.slot_ids, axis=0)
+        vs = mx.take(stored_v[..., : plan.max_length, :], plan.slot_ids, axis=0)
         positions = mx.array(plan.n0, dtype=mx.int32)[:, None] + mx.arange(T)[None, :]
         mask = mx.arange(plan.max_length)[None, None, :] <= positions[:, :, None]
         out = mx.fast.scaled_dot_product_attention(

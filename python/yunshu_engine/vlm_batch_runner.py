@@ -1955,8 +1955,7 @@ class VLMBatchRunner:
             with contextlib.suppress(Exception):
                 from .kernels import buffer_cache
 
-                mx.synchronize()
-                buffer_cache.clear_if_over()
+                buffer_cache.clear_if_over()  # syncs itself before a clear
 
 
 # Uids of the rows the upstream batch is sampling right now (set by the

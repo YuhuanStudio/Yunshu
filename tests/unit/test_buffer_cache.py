@@ -65,6 +65,24 @@ def test_zero_limit_clears_every_time(restore):
     assert mx.get_cache_memory() == 0
 
 
+def test_positive_limit_boundary_neither_syncs_nor_clears(restore, monkeypatch):
+    calls = []
+    monkeypatch.setattr(mx, "synchronize", lambda: calls.append("sync"))
+    monkeypatch.setattr(mx, "clear_cache", lambda: calls.append("clear"))
+    buffer_cache._STATE["limit"] = 1 << 30
+    buffer_cache.clear_if_over()
+    assert calls == []
+
+
+def test_zero_limit_boundary_syncs_before_clearing(restore, monkeypatch):
+    calls = []
+    monkeypatch.setattr(mx, "synchronize", lambda: calls.append("sync"))
+    monkeypatch.setattr(mx, "clear_cache", lambda: calls.append("clear"))
+    buffer_cache._STATE["limit"] = 0
+    buffer_cache.clear_if_over()
+    assert calls == ["sync", "clear"]
+
+
 def test_tight_weights_get_small_pool():
     gib = 1 << 30
     total = 128 * gib
