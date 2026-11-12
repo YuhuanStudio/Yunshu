@@ -82,6 +82,10 @@ class ModelLayer(Protocol):
         """The batch rows join: the DFlash batch when there is one, else the layer's own decode set."""
         ...
 
+    def admit(self, row: Any, req: Any) -> None:
+        """Per-row layer state, set in ``RoundDriver.add`` before the APC restore."""
+        ...
+
 
 class PackedLayer:
     """Qwen3.5 family (dense and MoE): ``forward.py`` packed rows, ``DecodeBatch`` slot buffers."""
@@ -143,6 +147,9 @@ class PackedLayer:
     def decode_set(self, kv_format: str, dflash: Any = None) -> Any:
         return dflash if dflash is not None else DecodeBatch(self.lm, kv_format)
 
+    def admit(self, row: Any, req: Any) -> None:
+        return None  # no per-row layer state (driver.py add)
+
 
 class FlashNextLayer:
     """Flash-Next (Qwen4): ``flashnext.py`` HC/QSA/GDN/MoE forward, ``FlashNextBatch``."""
@@ -202,6 +209,9 @@ class FlashNextLayer:
             else flashnext.FlashNextBatch(self.lm, kv_format)
         )
 
+    def admit(self, row: Any, req: Any) -> None:
+        return None  # no per-row layer state (driver.py add)
+
 
 class GenericLayer:
     """Every other mlx-vlm family: the model's own upstream forward per row, no drafter (``generic.py``)."""
@@ -253,6 +263,12 @@ class GenericLayer:
 
     def decode_set(self, kv_format: str, dflash: Any = None) -> Any:
         return generic.GenericBatch(self.lm, kv_format)
+
+    def admit(self, row: Any, req: Any) -> None:
+        if req.prompt_kwargs is None:
+            raise ValueError("generic round driver row: prompt_kwargs are required")
+        row.features = generic.PromptFeatures(req.prompt_kwargs, len(req.ids))
+        row.state = generic.RowState()
 
 
 class LayerRegistry:

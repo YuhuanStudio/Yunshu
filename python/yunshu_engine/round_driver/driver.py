@@ -64,7 +64,7 @@ from ..text_logprobs import top_logprobs_device
 from . import flashnext, generic, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
-from .forward import Segment, lane_forward, logits
+from .forward import Segment, lane_forward
 from .layer import FlashNextLayer, GenericLayer, PackedLayer
 
 logger = logging.getLogger(__name__)
@@ -577,14 +577,10 @@ class RoundDriver:
 
     def _logits(self, hidden: mx.array) -> mx.array:
         """Logits of the target's hidden rows (Flash-Next: HC states through the mixer and the head)."""
-        if self.generic:
-            return hidden  # the generic layer already returns logits rows
-        if self.flash:
-            return flashnext.logits(self.lm, hidden)
-        return logits(self.lm, hidden)
+        return self.layer.logits(hidden)
 
     def _new_cache(self) -> list:
-        return generic.new_cache(self.lm) if self.generic else self.lm.make_cache()
+        return self.layer.new_cache()
 
     # ── rows ─────────────────────────────────────────────────────────────
     def add(self, req: Request) -> int:
@@ -655,11 +651,7 @@ class RoundDriver:
             row.base = keyed_sampling.seed_base(seed)
         elif seed is not None:
             row.key = mx.random.key(int(seed))
-        if self.generic:
-            if req.prompt_kwargs is None:
-                raise ValueError("generic round driver row: prompt_kwargs are required")
-            row.features = generic.PromptFeatures(req.prompt_kwargs, len(req.ids))
-            row.state = generic.RowState()
+        self.layer.admit(row, req)
         self._restore(row)
         vocab = self.head.vocab if self.head is not None and draft else None
         if vocab is not None:
