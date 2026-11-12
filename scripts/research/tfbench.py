@@ -277,7 +277,19 @@ def engaged_spec_mode_line(engine, log):
             re.finditer(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
         )
         if not found:
-            return None, None
+            # text-only mlx-lm models (fast path): no drafter; n-gram only when it is the default
+            text = list(
+                re.finditer(
+                    r"Spec proposer initialized: [^\n]*greedy_default=(True|False)", log
+                )
+            )
+            if not text:
+                return None, None
+            m = text[-1]
+            start = log.rfind("\n", 0, m.start()) + 1
+            end = log.find("\n", m.end())
+            mode = "ngram" if m.group(1) == "True" else "off"
+            return mode, log[start : end if end != -1 else len(log)]
         m = found[-1]
         start = log.rfind("\n", 0, m.start()) + 1
         end = log.find("\n", m.end())
