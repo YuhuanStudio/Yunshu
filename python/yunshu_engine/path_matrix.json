@@ -2409,7 +2409,7 @@
       },
       "ngram_spec": {
         "s": "na",
-        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires self.generic, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
+        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires the generic layer's caps.ngram, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -2417,13 +2417,13 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       },
       "draftlm_spec": {
         "s": "na",
-        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires self.generic, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
+        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires the generic layer's caps.ngram, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -2431,13 +2431,13 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       },
       "gemma4_assistant_spec": {
         "s": "na",
-        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires self.generic, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
+        "why": "Flash-Next rows run the packed layer (flashnext.py / flashnext_dflash.py), not the generic layer; ngram_ok requires the generic layer's caps.ngram, and the packed windows are batch-invariant MTP / DFlash verifies where a second host proposer would break spec on == spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -2445,7 +2445,7 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       }
@@ -3012,7 +3012,7 @@
       },
       "ngram_spec": {
         "s": "na",
-        "why": "n-gram speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host n-gram proposer would be a second drafter and spec on must equal spec off",
+        "why": "n-gram speculation is generic-layer only (RoundDriver.ngram_ok requires the generic layer's caps.ngram); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host n-gram proposer would be a second drafter and spec on must equal spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -3020,13 +3020,13 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       },
       "draftlm_spec": {
         "s": "na",
-        "why": "draft-LM speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "why": "draft-LM speculation is generic-layer only (RoundDriver.ngram_ok requires the generic layer's caps.ngram); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -3034,13 +3034,13 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       },
       "gemma4_assistant_spec": {
         "s": "na",
-        "why": "Gemma-4 assistant speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "why": "Gemma-4 assistant speculation is generic-layer only (RoundDriver.ngram_ok requires the generic layer's caps.ngram); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -3048,7 +3048,7 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       }
@@ -3596,7 +3596,7 @@
       },
       "ngram_spec": {
         "s": "na",
-        "why": "n-gram speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host n-gram proposer would be a second drafter and spec on must equal spec off",
+        "why": "n-gram speculation is generic-layer only (RoundDriver.ngram_ok requires the generic layer's caps.ngram); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host n-gram proposer would be a second drafter and spec on must equal spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -3604,13 +3604,13 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       },
       "draftlm_spec": {
         "s": "na",
-        "why": "draft-LM speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "why": "draft-LM speculation is generic-layer only (RoundDriver.ngram_ok requires the generic layer's caps.ngram); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -3618,13 +3618,13 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       },
       "gemma4_assistant_spec": {
         "s": "na",
-        "why": "Gemma-4 assistant speculation is generic-layer only (RoundDriver.ngram_ok requires self.generic); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
+        "why": "Gemma-4 assistant speculation is generic-layer only (RoundDriver.ngram_ok requires the generic layer's caps.ngram); the Qwen3.5-family rows of this column run the packed layer, whose windows are batch-invariant MTP / DFlash tree verifies, so a host drafter would be a second drafter and spec on must equal spec off",
         "ev": [
           [
             "python/yunshu_engine/round_driver/driver.py",
@@ -3632,7 +3632,7 @@
           ],
           [
             "python/yunshu_engine/round_driver/driver.py",
-            "and self.generic"
+            "and self.layer.caps.ngram"
           ]
         ]
       }

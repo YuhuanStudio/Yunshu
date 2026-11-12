@@ -19,7 +19,10 @@ pytest.importorskip("mlx_vlm")
 
 from yunshu_engine.round_driver import driver as drv  # noqa: E402
 from yunshu_engine.round_driver import generic  # noqa: E402
-from yunshu_engine.round_driver.layer import PackedLayer  # noqa: E402
+from yunshu_engine.round_driver.layer import (  # noqa: E402
+    GenericLayer,
+    PackedLayer,
+)
 
 VOCAB, DIM, HEADS, DEPTH = 64, 32, 2, 2
 LOG: list[dict] = []
@@ -176,7 +179,7 @@ def request(lm, ids, n=8, handle=None, **kw):
 
 def make(lm, chunk=8, **kw):
     kw.setdefault("stop_tokens", set())
-    return drv.RoundDriver(lm, generic_layer=True, chunk=chunk, **kw)
+    return drv.RoundDriver(lm, layer=GenericLayer(lm), chunk=chunk, **kw)
 
 
 def run(d, reqs, *, join_at=None, drop=None):
@@ -425,9 +428,9 @@ def test_every_step_evaluates_the_caches_it_advanced():
 def test_a_generic_driver_takes_no_drafter_and_no_int8_kv():
     lm = TinyLM()
     with pytest.raises(ValueError, match="no drafter"):
-        drv.RoundDriver(lm, generic_layer=True, drafter=object())
+        drv.RoundDriver(lm, layer=GenericLayer(lm), drafter=object())
     with pytest.raises(ValueError, match="YUNSHU_KV_PRECISION"):
-        drv.RoundDriver(lm, generic_layer=True, kv_format="int8")
+        drv.RoundDriver(lm, layer=GenericLayer(lm), kv_format="int8")
 
 
 def test_a_generic_row_needs_its_prompt_features():
@@ -494,7 +497,7 @@ def test_the_engine_builds_a_generic_driver_for_every_family_without_a_packed_la
 
     src = inspect.getsource(vlm_engine.VLMEngine._build_batch_runner)
     # one driver for every model: the packed layers when wanted, else the generic one (paravirtual too)
-    assert src.count("generic_layer=True") == 2
+    assert src.count("layer=GenericLayer(language_model(self._model))") == 2
     assert "generic_layer = not use_driver" in src
 
 

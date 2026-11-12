@@ -4,11 +4,9 @@
 width) and its decode set (the batch rows join). The layer objects delegate to the functions the driver used
 before, so the arithmetic and the construction order are unchanged.
 
-Selection: the driver's ``generic_layer=`` flag keeps the old rule (generic if set, else Flash-Next by
-``flashnext.is_flash_next``, else packed). ``LayerRegistry.select`` is NOT used for selection yet: the engine's
-rule is wider (``vlm_engine._round_driver_wanted``: spec family, lane self-test), and ``PackedLayer.supports``
-is structural only (``forward.supports``). The registry becomes the selector only when the engine passes a
-layer object (C8).
+The engine passes the layer (``vlm_engine``, ``vlm_batch_runner``); without one the driver takes Flash-Next
+when ``flashnext.is_flash_next`` holds, else packed. ``LayerRegistry.select`` is not the engine's selector: the
+engine's rule is wider (``vlm_engine._round_driver_wanted``: spec family, lane self-test).
 """
 
 from __future__ import annotations
@@ -108,6 +106,10 @@ class ModelLayer(Protocol):
         """Per-step reset before a step runs (packed + DFlash drafter: the mRoPE state)."""
         ...
 
+    def ple_prefetch(self, lm: Any) -> Any:
+        """The PLE-row prefetcher a prefill step reads from (Flash-Next, SSD table) or None."""
+        ...
+
     def apc_suffix(self) -> str:
         """Extra APC arithmetic key of this layer (generic: the resume-rope and jump-forward namespaces)."""
         ...
@@ -200,6 +202,9 @@ class PackedLayer:
     def apc_suffix(self) -> str:
         return ""
 
+    def ple_prefetch(self, lm: Any) -> Any:
+        return None
+
     def cut(self, row: Any, start: int, atom: Callable[[int], int]) -> int:
         """End of the one prompt atom that starts at ``start``: the next multiple of the atom size, cut at the
         row's next APC checkpoint and at the prompt's end. Split-invariant prefill keeps the plan a function of
@@ -260,6 +265,11 @@ class PackedLayer:
         return forward.lane_forward(
             self.lm, seg, capture_ids=capture_ids, captured=captured
         )
+
+
+def language_model(model: Any) -> Any:
+    """The language model a round driver binds its layer to (the wrapper's ``language_model`` when present)."""
+    return model.language_model if hasattr(model, "language_model") else model
 
 
 def _grid_cut(row: Any, start: int, atom: Callable[[int], int]) -> int:
@@ -353,6 +363,12 @@ class FlashNextLayer:
 
     def apc_suffix(self) -> str:
         return ""
+
+    def ple_prefetch(self, lm: Any) -> Any:
+        # Flash-Next spans read their PLE rows from SSD on a background thread (None when in memory)
+        from .. import ple_prefetch
+
+        return ple_prefetch.attach(lm)
 
     def prefill(
         self,
@@ -456,6 +472,9 @@ class GenericLayer:
 
     def begin_step(self, model: Any, drafted: bool) -> None:
         return None  # no DFlash drafter on this layer
+
+    def ple_prefetch(self, lm: Any) -> Any:
+        return None
 
     def apc_suffix(self) -> str:
         # Older generic reply checkpoints may contain suffix K rotated from zero after APC restore; never

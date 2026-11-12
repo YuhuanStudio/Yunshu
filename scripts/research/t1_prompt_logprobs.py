@@ -59,9 +59,9 @@ def serve(args):
 
             layer = (
                 "generic"
-                if driver.generic
+                if driver.layer.caps.ngram
                 else "flashnext"
-                if driver.flash
+                if driver.layer.caps.lazy_head
                 else "packed-qwen35"
             )
             mode = reference_prefill_mode(layer, len(req.ids))

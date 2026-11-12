@@ -65,7 +65,7 @@ from . import flashnext, replay
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment
-from .layer import FlashNextLayer, GenericLayer, PackedLayer
+from .layer import FlashNextLayer, PackedLayer, language_model
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +450,6 @@ class RoundDriver:
         apc: Any = None,
         kv_format: str = "bf16",
         max_draft: int | None = None,
-        generic_layer: bool = False,
         row_drafters: Any = None,
         layer: Any = None,
     ):
@@ -474,7 +473,7 @@ class RoundDriver:
         # stores the reply's decode cache there)
         self.finish_hook: Any = None
         self.model = model
-        self.lm = model.language_model if hasattr(model, "language_model") else model
+        self.lm = language_model(model)
         # Placeholder ids of image / video / audio tokens (APC never cuts or restores across them)
         self._media_ids: set[int] = set()
         config = getattr(model, "config", None)
@@ -494,13 +493,9 @@ class RoundDriver:
             self._media_ids |= set(media_token_ids(model))
         self.stop_tokens = set(stop_tokens or ())
         # The model layer (round_driver/layer.py) owns the family's head, DFlash batch, default draft width
-        # and decode set. ``generic_layer=`` builds the same layer the driver always built.
-        if generic_layer and layer is not None:
-            raise ValueError("round driver: pass layer= or generic_layer=, not both")
+        # and decode set. Without one: Flash-Next when the model is Flash-Next, else packed.
         if layer is None:
-            if generic_layer:
-                layer = GenericLayer(self.lm)
-            elif flashnext.is_flash_next(self.lm):
+            if flashnext.is_flash_next(self.lm):
                 layer = FlashNextLayer(self.lm)
             else:
                 layer = PackedLayer(self.lm)
@@ -509,15 +504,9 @@ class RoundDriver:
                 "round driver: the layer is bound to another language model"
             )
         self.layer = layer
-        self.flash = isinstance(layer, FlashNextLayer)
-        # Generic layer: the model's own upstream forward, one call per row (``generic.py``); no drafter,
-        # logits instead of hidden states. Mutually exclusive with the two packed model layers.
-        self.generic = isinstance(layer, GenericLayer)
         # draft LM / Gemma-4 assistant drafters of the generic layer (``draftlm.RowDrafters``); n-gram otherwise
-        self.row_drafters = row_drafters if self.generic else None
-        if self.generic and (
-            self.flash or drafter is not None or dflash_drafter is not None
-        ):
+        self.row_drafters = row_drafters if layer.caps.ngram else None
+        if layer.caps.ngram and (drafter is not None or dflash_drafter is not None):
             raise ValueError(
                 "round driver: the generic layer takes no drafter and no Flash-Next model"
             )
@@ -686,7 +675,7 @@ class RoundDriver:
         logprobs, with windowable processors."""
         return bool(
             req.ngram
-            and self.generic
+            and self.layer.caps.ngram
             and req.sampling is None
             and req.guide is None
             and req.budget is None
@@ -1599,7 +1588,7 @@ class RoundDriver:
             ev = self._preempt_event(items)
             # Flash-Next spans read their PLE rows from SSD: the following spans' rows are read on a
             # background thread while this step runs on the GPU (None when the table is in memory)
-            pf = ple_prefetch.attach(self.lm) if self.flash else None
+            pf = self.layer.ple_prefetch(self.lm)
             try:
                 with preempt.scope(ev) if ev is not None else contextlib.nullcontext():
                     # Every segment runs the engine's own prefill forward (nax matmul, prefill
@@ -1923,12 +1912,12 @@ class RoundDriver:
         if prof.on:
             prof.mark("plan", *parts)
         want_hidden = (
-            self.generic
+            self.layer.caps.ngram
             and len(rows) == 1
             and rows[0].ngram is not None
             and rows[0].ngram.needs_hidden
         )
-        if self.generic:
+        if self.layer.caps.ngram:
             self.batch.want_hidden = want_hidden
         hidden = self.batch.forward(lens, mx.concatenate(parts))
         items, at = [], 0

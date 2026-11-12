@@ -23,7 +23,9 @@ def req(k, n=64):
 
 
 def run(keys, join=None):
-    d = drv.RoundDriver(lm, generic_layer=True, stop_tokens=set())
+    from yunshu_engine.round_driver.layer import GenericLayer
+
+    d = drv.RoundDriver(lm, layer=GenericLayer(lm), stop_tokens=set())
     out = {}
     pend = {k: j for k, j in zip(keys, join or [0] * len(keys), strict=True)}
     steps = 0

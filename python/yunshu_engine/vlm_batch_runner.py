@@ -1108,9 +1108,15 @@ class VLMBatchRunner:
             if self._aux_driver is None:
                 from .round_driver.driver import RoundDriver
 
+                # the same layer family as the main driver, bound to the same language model
+                aux_layer = (
+                    None
+                    if self.driver is None
+                    else type(self.driver.layer)(self.driver.lm)
+                )
                 self._aux_driver = RoundDriver(
                     self.model,
-                    generic_layer=getattr(self.driver, "generic", False),
+                    layer=aux_layer,
                     drafter=self.drafter if self.draft_kind == "mtp" else None,
                     dflash_drafter=self.drafter
                     if self.draft_kind == "dflash"

@@ -98,14 +98,16 @@ def test_flash_next_is_detected_and_takes_flash_batch(tiny):
     lm, head = tiny
     assert flashnext.is_flash_next(lm)
     driver = RoundDriver(SimpleNamespace(language_model=lm), drafter=head, chunk=CHUNK)
-    assert driver.flash and isinstance(driver.batch, flashnext.FlashNextBatch)
+    assert driver.layer.caps.lazy_head and isinstance(
+        driver.batch, flashnext.FlashNextBatch
+    )
     assert isinstance(driver.head, flashnext.FlashNextHead)
     assert driver.dflash is None and driver.can_draft
     assert driver.max_draft == 1
     plain = RoundDriver(
         SimpleNamespace(language_model=lm), chunk=CHUNK, plain_verify=True
     )
-    assert plain.flash and plain.head is None and not plain.can_draft
+    assert plain.layer.caps.lazy_head and plain.head is None and not plain.can_draft
     assert (
         plain.dflash is None
     )  # no Qwen3.5 tree-verify batch for a plain Flash-Next row

@@ -17,6 +17,7 @@ pytest.importorskip("mlx_lm")
 
 from yunshu_engine.round_driver import driver as drv  # noqa: E402
 from yunshu_engine.round_driver import textlm  # noqa: E402
+from yunshu_engine.round_driver.layer import GenericLayer, language_model  # noqa: E402
 
 VOCAB = 64
 ARGS = dict(
@@ -68,7 +69,11 @@ def request(adapter, ids, n=8, handle=None):
 
 def make(adapter, chunk=8):
     return drv.RoundDriver(
-        adapter, generic_layer=True, stop_tokens=set(), chunk=chunk, apc=None
+        adapter,
+        layer=GenericLayer(language_model(adapter)),
+        stop_tokens=set(),
+        chunk=chunk,
+        apc=None,
     )
 
 

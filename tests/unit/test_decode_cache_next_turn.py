@@ -5,6 +5,7 @@ stored under prompt + the tokens it holds, so the follow-up prefills only its ne
 from types import SimpleNamespace
 
 from yunshu_engine import settings
+from yunshu_engine.round_driver.layer import PackedLayer
 from yunshu_engine.vlm_batch_runner import VLMBatchRunner, _Job
 
 
@@ -173,7 +174,7 @@ def test_round_driver_last_finished_row_defers_its_reply_cache():
     )
     runner = _runner()
     drv = RoundDriver.__new__(RoundDriver)
-    drv.generic = False
+    drv.layer = PackedLayer(None)  # the packed slot layer: no generic cut-out arm
     drv.batch = None
     drv.rows, drv.head, drv.dflash = [], None, None
     drv.finish_hook = runner._driver_store_decode

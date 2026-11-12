@@ -52,6 +52,13 @@ STATE_SOURCES = (
 STATE_SUFFIXES = ("_STATE", "_STATS")
 
 
+def _layer_for(name, model):
+    """The explicit layer of the generic arm; None keeps the driver's own packed / Flash-Next choice."""
+    from yunshu_engine.round_driver.layer import GenericLayer, language_model
+
+    return GenericLayer(language_model(model)) if name == "generic" else None
+
+
 def digest(payload):
     return hashlib.sha256(
         json.dumps(
@@ -585,7 +592,7 @@ def _capture(layer, model=None, tokens=8, device="gpu"):
     def run(indices, mode, schedule, *, spec=False, apc=None, hits=None):
         d = RoundDriver(
             wrapper,
-            generic_layer=layer == "generic",
+            layer=_layer_for(layer, wrapper),
             stop_tokens=set(),
             chunk=512,
             drafter=head if spec else None,

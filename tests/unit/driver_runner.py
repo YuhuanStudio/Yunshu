@@ -15,7 +15,13 @@ def driver_runner(
         apc_semantic_hash=apc_semantic_hash,
         **kw,
     )
+    from yunshu_engine.round_driver.layer import GenericLayer, language_model
+
     runner.driver = RoundDriver(
-        model, generic_layer=True, apc=apc_manager, chunk=2048, stop_tokens=set()
+        model,
+        layer=GenericLayer(language_model(model)),
+        apc=apc_manager,
+        chunk=2048,
+        stop_tokens=set(),
     )
     return runner

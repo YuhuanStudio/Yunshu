@@ -1068,7 +1068,10 @@ class VLMEngine:
 
         ok = self._apc_capacity_fits(input_ids)
         if not ok:
-            fallbacks.record("apc_capacity_chunked", "prompt exceeds the APC RAM budget; chunked prefill")
+            fallbacks.record(
+                "apc_capacity_chunked",
+                "prompt exceeds the APC RAM budget; chunked prefill",
+            )
         return ok
 
     def _apc_capacity_fits(self, input_ids) -> bool:
@@ -2584,11 +2587,12 @@ class VLMEngine:
             runner.stop_tokens = set(self._get_eos_ids())
             runner.inflight = lambda: self._active_count
             from .round_driver.driver import RoundDriver
+            from .round_driver.layer import GenericLayer, language_model
 
             # the model's own forward per row, no APC: the stock cold forwards, on the one driver
             runner.driver = RoundDriver(
                 self._model,
-                generic_layer=True,
+                layer=GenericLayer(language_model(self._model)),
                 stop_tokens=runner.stop_tokens,
                 chunk=PREFILL_STEP,
                 apc=None,
@@ -2905,10 +2909,11 @@ class VLMEngine:
             )
         if generic_layer:
             from .round_driver.driver import RoundDriver
+            from .round_driver.layer import GenericLayer, language_model
 
             runner.driver = RoundDriver(
                 self._model,
-                generic_layer=True,
+                layer=GenericLayer(language_model(self._model)),
                 stop_tokens=runner.stop_tokens,
                 chunk=PREFILL_STEP,
                 apc=self._apc_backend,
