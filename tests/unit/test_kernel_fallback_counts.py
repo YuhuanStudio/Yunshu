@@ -12,6 +12,10 @@ import pytest
 
 from yunshu_engine import fallbacks
 
+# the stock QuantizedLinear call as the process imports it: verify / batch-invariant wrappers that other
+# tests install on the class are not in it (they would count the same no-route call twice)
+_STOCK_QL_CALL = nn.QuantizedLinear.__call__
+
 
 @pytest.fixture(autouse=True)
 def _fresh_counters():
@@ -131,8 +135,7 @@ def test_verify_qmm_no_route_is_counted(monkeypatch, variant):
     import importlib
 
     mod = importlib.import_module(f"yunshu_engine.kernels.{variant}.qwen35_verify_qmm")
-    orig = nn.QuantizedLinear.__call__
-    monkeypatch.setattr(nn.QuantizedLinear, "__call__", orig)
+    monkeypatch.setattr(nn.QuantizedLinear, "__call__", _STOCK_QL_CALL)
     monkeypatch.setattr(
         nn.QuantizedLinear, "_omlx_verify_qmm_patched", False, raising=False
     )

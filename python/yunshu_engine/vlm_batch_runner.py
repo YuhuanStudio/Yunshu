@@ -1150,12 +1150,12 @@ class VLMBatchRunner:
                     else vocab.set_context(job.ids)
                 )
             logger.info("Round driver: draft vocabulary context +%s ids", extra)
-        media = (
-            self._generic_request(job)
-            if getattr(driver, "generic", False)
-            else self._media_request(job)
-        )
-        if media and not getattr(driver, "generic", False):
+        # the generic layer's rows always carry the model's prompt inputs (GenericLayer.admit requires them)
+        from .round_driver.layer import GenericLayer
+
+        generic_rows = isinstance(driver.layer, GenericLayer)
+        media = self._generic_request(job) if generic_rows else self._media_request(job)
+        if media and not generic_rows:
             logger.info(
                 "Round driver: media prompt %d tokens, rope_delta %d",
                 len(job.ids),
