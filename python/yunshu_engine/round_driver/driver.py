@@ -947,6 +947,10 @@ class RoundDriver:
 
     def _release(self, gone: list[_Row]) -> None:
         """Drop rows' slots in the decode batch and the head's."""
+        if gone:
+            from .. import gpu_window
+
+            gpu_window.boundary("request_end")
         if gone and self.head is not None and any(r.generated for r in gone):
             # what the draft-depth allocator believed when this reply ended: per-width step cost,
             # per-depth chain cost and the rows' acceptance (compare with the measured tok/s)
@@ -1220,6 +1224,9 @@ class RoundDriver:
         live = [r for r in pending if r in self.rows and not r.finished]
         if not live:
             return
+        from .. import gpu_window
+
+        gpu_window.boundary("join")
         self.batch.join(live)
         arrays = list(self.batch.arrays())
         ready = [r for r in live if r.drafting] if self.head is not None else []
@@ -1510,6 +1517,11 @@ class RoundDriver:
                 replay.clear()
 
     def _prefill_step(self, waiting: list[_Row], decoding: bool) -> list[Event]:
+        from .. import gpu_window
+
+        gpu_window.boundary(
+            "prefill"
+        )  # a prefill is not steady decode: no window spans it
         items: list[_Item] = []
         budget = self.chunk if decoding else self.idle_budget
         at = 0

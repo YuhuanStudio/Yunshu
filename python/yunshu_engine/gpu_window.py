@@ -14,11 +14,25 @@ import ctypes
 import json
 import logging
 import os
+import statistics
 import time
 
 logger = logging.getLogger(__name__)
 START, END = 40, 80
-_STATE: dict = {"lib": False, "n": 0, "t0": 0.0, "marks": None}
+ROUNDS = END - START
+# a round gap is a stall only when it exceeds STALL_X x the window's median round gap and STALL_MIN_S
+STALL_X, STALL_MIN_S, STALL_MIN_HISTORY = 5.0, 0.05, 3
+# marks is None outside a window; done once a steady window was reported.
+_STATE: dict = {
+    "lib": False,
+    "n": 0,
+    "t0": 0.0,
+    "marks": None,
+    "start": 0,
+    "last": 0.0,
+    "gaps": [],
+    "done": False,
+}
 
 
 def _lib():
@@ -46,49 +60,97 @@ def tick(*, capture_kernels: bool = True) -> None:
         lib.metalrt_cap_begin()
     elif capture and n == START:
         _log_kernel_profile(lib)
-    if n == START:
+    now = time.monotonic()
+    if _STATE["marks"] is not None:
+        gap = now - _STATE["last"]
+        gaps = _STATE["gaps"]
+        if _is_stall(gap, gaps):
+            median = statistics.median(gaps)
+            _drop(
+                lib,
+                f"host gap of {gap * 1000:.0f} ms (median round {median * 1000:.0f} ms)",
+            )
+        elif n - _STATE["start"] < ROUNDS:
+            gaps.append(gap)
+            _STATE["marks"].append((now, "tick"))
+            _STATE["last"] = now
+            return
+        else:
+            _finish(lib)
+            return
+    if n >= START and not _STATE["done"]:
         lib.metalrt_begin()
+        _STATE["start"] = n
         _STATE["t0"] = time.perf_counter()
-        _STATE["marks"] = [(time.monotonic(), "tick")]
-    elif n == END:
-        wall = (time.perf_counter() - _STATE["t0"]) * 1000
-        buf = ctypes.create_string_buffer(4096)
-        lib.metalrt_end(buf, 4096)
-        stats = json.loads(buf.value.decode())
-        rounds = END - START
+        _STATE["last"] = now
+        _STATE["gaps"] = []
+        _STATE["marks"] = [(now, "tick")]
+
+
+def _is_stall(gap: float, gaps: list) -> bool:
+    """A gap far above the window's own median round time (a prefill, a stall), not a slow round."""
+    if len(gaps) < STALL_MIN_HISTORY or gap <= STALL_MIN_S:
+        return False
+    return gap > STALL_X * statistics.median(gaps)
+
+
+def boundary(name: str) -> None:
+    """A non-decode host event (prefill, request join or end): a window open now spans it, so it is
+    contaminated. The window is discarded without tables and a fresh one opens at the next tick."""
+    if _STATE["marks"] is not None:
+        _drop(_STATE["lib"], f"boundary {name}")
+
+
+def _drop(lib, reason: str) -> None:
+    """Discard an open window: its counters are drained, no tables are printed, one line says why."""
+    buf = ctypes.create_string_buffer(4096)
+    lib.metalrt_end(buf, 4096)
+    rounds = len(_STATE["marks"]) - 1
+    _STATE["marks"] = None
+    logger.info(
+        "GPU window dropped (%s) after %d rounds: not steady decode", reason, rounds
+    )
+
+
+def _finish(lib) -> None:
+    """Close a steady window: log its wall, busy/idle and the per-segment tables once."""
+    wall = (time.perf_counter() - _STATE["t0"]) * 1000
+    buf = ctypes.create_string_buffer(4096)
+    lib.metalrt_end(buf, 4096)
+    stats = json.loads(buf.value.decode())
+    rounds = ROUNDS
+    _STATE["done"] = True
+    logger.info(
+        "GPU window (%d rounds): wall %.2f ms/round, busy %.2f, idle %.2f, dispatches %d/round, commit cpu %.2f, stats %s",
+        rounds,
+        wall / rounds,
+        stats["busy_union_ms"] / rounds,
+        (wall - stats["busy_union_ms"]) / rounds,
+        stats["dispatches"] // rounds,
+        stats["commit_cpu_ms"] / rounds,
+        stats,
+    )
+    marks, _STATE["marks"] = _STATE["marks"], None
+    if marks and hasattr(lib, "metalrt_gaps"):
+        lib.metalrt_gaps.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_double]
+        big = ctypes.create_string_buffer(1 << 21)
+        lib.metalrt_gaps(big, 1 << 21, 0.02)
+        charged = charge_gaps(json.loads(big.value.decode()), marks)
         logger.info(
-            "GPU window (%d rounds): wall %.2f ms/round, busy %.2f, idle %.2f, dispatches %d/round, commit cpu %.2f, stats %s",
-            rounds,
-            wall / rounds,
-            stats["busy_union_ms"] / rounds,
-            (wall - stats["busy_union_ms"]) / rounds,
-            stats["dispatches"] // rounds,
-            stats["commit_cpu_ms"] / rounds,
-            stats,
+            "GPU idle by host segment (ms/round, gaps > 20 us): %s",
+            {
+                k: round(v / rounds, 3)
+                for k, v in sorted(charged.items(), key=lambda kv: -kv[1])
+            },
         )
-        marks, _STATE["marks"] = _STATE["marks"], None
-        if marks and hasattr(lib, "metalrt_gaps"):
-            lib.metalrt_gaps.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_double]
-            big = ctypes.create_string_buffer(1 << 21)
-            lib.metalrt_gaps(big, 1 << 21, 0.02)
-            charged = charge_gaps(json.loads(big.value.decode()), marks)
-            logger.info(
-                "GPU idle by host segment (ms/round, gaps > 20 us): %s",
-                {
-                    k: round(v / rounds, 3)
-                    for k, v in sorted(charged.items(), key=lambda kv: -kv[1])
-                },
-            )
-            spans = segment_times(marks)
-            logger.info(
-                "Host time by segment (ms/round): %s",
-                {
-                    k: round(v / rounds, 3)
-                    for k, v in sorted(spans.items(), key=lambda kv: -kv[1])
-                },
-            )
-    elif START < n < END and _STATE["marks"] is not None:
-        _STATE["marks"].append((time.monotonic(), "tick"))
+        spans = segment_times(marks)
+        logger.info(
+            "Host time by segment (ms/round): %s",
+            {
+                k: round(v / rounds, 3)
+                for k, v in sorted(spans.items(), key=lambda kv: -kv[1])
+            },
+        )
 
 
 def _log_kernel_profile(lib) -> None:
