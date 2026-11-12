@@ -34,6 +34,7 @@ import numpy as np
 
 from ..kernels import ragged_attention as ra
 from ..kernels.ragged_kv import _scatter_rows
+from .decode_set import DecodeSet
 
 CAP_STEP = 512  # key capacity granularity (a multiple of the tile's 64)
 MAX_WINDOW = 8  # the tile kernel's token window
@@ -335,7 +336,7 @@ def attend(
     return cast(mx.array, at.o_proj(out))
 
 
-class DecodeBatch:
+class DecodeBatch(DecodeSet):
     """The decoding rows of one target model (see the module docstring)."""
 
     def __init__(self, language_model: Any, kv_format: str = "bf16"):

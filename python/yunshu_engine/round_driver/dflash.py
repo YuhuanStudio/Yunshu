@@ -29,6 +29,7 @@ from ..dflash_fast import Verifier, pack_readback, prepare, unpack_readback
 from ..dflash_plan import FastShape, remap_landed, reorder, search_tree
 from ..text_logprobs import top_logprobs_device
 from .allocate import dflash_room, fair_nodes
+from .decode_set import DecodeSet
 from .forward import logits
 from .stage_profile import RoundProfile
 from .verify import DRIVER_MAX_ROWS, Window, forward
@@ -47,7 +48,7 @@ def _plain_guided(r) -> bool:
     return guide is not None and guide.constrained and not masks_every_row(guide)
 
 
-class DFlashBatch:
+class DFlashBatch(DecodeSet):
     def __init__(self, model, draft, kv_format: str = "bf16"):
         self.kv_format = kv_format
         self._diag = dict(rounds=0, rows=0, s=0.0, nodes=0, used=0)
@@ -150,8 +151,7 @@ class DFlashBatch:
             if self.kv_format == "int8":
                 self._quantize_cache(row.cache)
             if not self.can_draft:
-                row.slot = id(row)
-                self.rows.append(row)
+                self._admit(row)
                 tree_verify.reserve_decode(row.cache, row.req.max_tokens + 32)
                 continue
             hidden = self.hidden.pop(id(row), None)
@@ -181,8 +181,7 @@ class DFlashBatch:
                 copier = CopyDrafter(max_draft=copy_rows - 1)
                 copier.extend(row.context)
                 self.copiers[id(row)] = copier
-            row.slot = id(row)
-            self.rows.append(row)
+            self._admit(row)
             tree_verify.reserve_decode(row.cache, row.req.max_tokens + 32)
 
     def finish_tail(self, row) -> None:
@@ -204,10 +203,8 @@ class DFlashBatch:
         tail.add(rows, used)
 
     def leave(self, rows):
-        gone = {id(r) for r in rows}
-        self.rows = [r for r in self.rows if id(r) not in gone]
+        self._drop(rows)
         for row in rows:
-            row.slot = None
             self.rings.pop(id(row), None)
             self.copiers.pop(id(row), None)
             self.hidden.pop(id(row), None)
@@ -219,10 +216,13 @@ class DFlashBatch:
                 self.mode_priors.learn(row.keyed is not None, gone_budget)
             self.prof.finish(id(row))
 
-    def arrays(self):
+    def _row_arrays(self, row):
         from .driver import cache_buffers
 
-        arrays = [a for r in self.rows for a in cache_buffers(r.cache)]
+        return cache_buffers(row.cache)
+
+    def arrays(self):
+        arrays = super().arrays()
         arrays += list(self.hidden.values())
         for ring in self.rings.values():
             arrays += [ring.pos, ring.slot_pos, *ring.keys, *ring.values]

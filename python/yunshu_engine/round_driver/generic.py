@@ -27,6 +27,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from .decode_set import DecodeSet
+
 # attributes an mRoPE language model carries from one call to the next (mrope.clear_rope_state)
 STATE_ATTRS = ("_position_ids", "_rope_deltas", "_batch_rope_deltas")
 
@@ -202,7 +204,7 @@ def _trimmable(cache: Any, extra: int) -> bool:
     return off + extra <= int(size)
 
 
-class GenericBatch:
+class GenericBatch(DecodeSet):
     """The decoding rows of a generic target. Each row decodes on its own cache, one upstream call per
     row per step: exactly the call a lone request makes, so a row's output does not depend on which
     other rows share the round (solo == concurrent, greedy and seeded).
@@ -233,20 +235,6 @@ class GenericBatch:
             None  # (1, T, D) normed hidden of the last forward
         )
 
-    def join(self, rows: list) -> None:
-        for row in rows:
-            row.slot = id(row)
-            self.rows.append(row)
-
-    def leave(self, gone: list) -> None:
-        ids = {id(r) for r in gone}
-        for r in gone:
-            r.slot = None
-        self.rows = [r for r in self.rows if id(r) not in ids]
-
-    def cut_out(self, row: Any) -> None:
-        """Rows keep their own caches; nothing to give back."""
-
     @property
     def cache(self) -> list | None:
         """Every decoding row's cache (None with no rows)."""
@@ -254,8 +242,8 @@ class GenericBatch:
             return None
         return [c for r in self.rows for c in r.cache]
 
-    def arrays(self) -> list:
-        return [a for r in self.rows for a in cache_arrays(r.cache)]
+    def _row_arrays(self, row: Any) -> list:
+        return cache_arrays(row.cache)
 
     def forward(self, lens: list[int], tokens: mx.array) -> mx.array:
         """One upstream call per row over its decode window; logits in row/window order."""

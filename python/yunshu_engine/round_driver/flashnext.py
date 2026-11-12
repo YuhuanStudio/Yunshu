@@ -29,6 +29,7 @@ from typing import Any, cast
 import mlx.core as mx
 
 from ..qwen4_family import is_qwen4_type, qwen4_first_module
+from .decode_set import DecodeSet
 from .verify import DRIVER_MAX_ROWS
 
 logger = logging.getLogger(__name__)
@@ -484,8 +485,9 @@ def chain_forward(lm: Any, tokens: list, caches: list, media: list | None = None
     return native_chain_forward(lm, tokens, caches)
 
 
-class FlashNextBatch:
-    """The decoding rows of one Flash-Next target: every row on its own caches."""
+class FlashNextBatch(DecodeSet):
+    """The decoding rows of one Flash-Next target: every row on its own caches (``join`` / ``leave`` /
+    ``arrays`` / ``cut_out`` are the decode set's; the caches stay on the row)."""
 
     def __init__(self, language_model: Any, kv_format: str = "bf16"):
         if kv_format != "bf16":
@@ -497,24 +499,8 @@ class FlashNextBatch:
         self.rows: list = []
         self._last: list | None = None
 
-    def join(self, rows: list) -> None:
-        for row in rows:
-            row.slot = id(
-                row
-            )  # the caches stay on the row (``cache`` is its own state)
-            self.rows.append(row)
-
-    def leave(self, gone: list) -> None:
-        ids = {id(r) for r in gone}
-        for r in gone:
-            r.slot = None
-        self.rows = [r for r in self.rows if id(r) not in ids]
-
-    def arrays(self) -> list:
-        out: list = []
-        for r in self.rows:
-            out += cache_arrays(r.cache)
-        return out
+    def _row_arrays(self, row: Any) -> list:
+        return cache_arrays(row.cache)
 
     def packs(self, lens: list[int]) -> list[list[int]]:
         """Row indices per fused pack (at most ``PACK_ROWS`` window positions each)."""
