@@ -78,6 +78,10 @@ def test_custom_contract_stays_on_adapter():
 def test_async_restore_keeps_store_synchronous_and_native_restore_isolated():
     from mlx_vlm import apc
 
+    # install() imports apc_manager, which wraps apc's clone at import: wrap first, so `original`
+    # is the function uninstall() restores whether or not another test imported it already
+    import yunshu_engine.apc_manager  # noqa: F401
+
     module_spec = importlib.util.spec_from_file_location(
         "async_restore",
         Path(__file__).resolve().parents[2] / "scripts/research/async_restore.py",
