@@ -146,7 +146,7 @@ def test_flash_next_prefill_is_hooked(monkeypatch, tmp_path):
 
     body_hooks = []
     monkeypatch.setattr(fn, "prefill", inner_prefill)
-    monkeypatch.setattr(fn, "logits", lambda lm, h: np.zeros((h.shape[0], 2)))
+    monkeypatch.setattr(fn, "logits", lambda lm, h: mx.zeros((h.shape[0], 2)))
     cur = tmp_path / "_current.json"
     cur.write_text("{}")
     state = {"tokens": [], "active": False, "bad": False}

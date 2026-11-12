@@ -22,7 +22,44 @@ from pathlib import Path
 
 K = 32
 BLOCK = 128
+HEAD_ROWS = 8  # rows per Flash-Next head call (flashnext_head)
+GROUP = 2048  # vocabulary slice of the two-stage top-K (top_k)
 H, KV, D, TOPK, QBLOCK = 24, 2, 256, 512, 4
+
+
+def top_k(logits, k: int = K, group: int = GROUP):
+    """The ``k`` largest logits of each row ``[b, V]`` and their ids, descending (ties: lower id first).
+
+    Same result as ``argpartition`` over the full vocabulary followed by ``argsort(-vals)``, which on the
+    GPU is a stable full-vocabulary merge sort (10.6 ms per 128-row block at V=248K; this: 3.7 ms). Each
+    ``group``-wide vocabulary slice keeps its own top ``k`` (a single-threadgroup sort), and the
+    union, which holds the row's top ``k`` under the same (value, id) order, is sorted again: ids
+    ascending first, so the stable value sort breaks ties by id exactly as the full sort does."""
+    import mlx.core as mx
+
+    rows, vocab = logits.shape
+    pad = (-vocab) % group
+    x = logits
+    if pad:  # -inf padding never reaches the top k of a row with k finite logits
+        x = mx.concatenate(
+            [logits, mx.full((rows, pad), -mx.inf, dtype=logits.dtype)], axis=1
+        )
+    groups = x.shape[1] // group
+    local = mx.argpartition(x.reshape(rows, groups, group), kth=group - k, axis=-1)
+    ids = (
+        local[..., group - k :]
+        + (mx.arange(groups, dtype=local.dtype) * group)[:, None]
+    )
+    ids = mx.sort(ids.reshape(rows, groups * k), axis=-1)
+    vals = mx.take_along_axis(x, ids, axis=-1)
+    # ascending (value, id): the last k are the top k
+    keep = mx.argsort(vals, axis=-1)[:, -k:]
+    ids = mx.take_along_axis(ids, keep, axis=-1)
+    vals = mx.take_along_axis(vals, keep, axis=-1)
+    order = mx.argsort(-vals, axis=-1)
+    return mx.take_along_axis(ids, order, axis=-1), mx.take_along_axis(
+        vals, order, axis=-1
+    )
 
 
 def reference_attend(
@@ -200,14 +237,7 @@ def install(arm: str, arch: str = "qwen4") -> None:
             stop = min(rows, start + BLOCK)
             logits = head(hidden[:, start:stop])[0].astype(mx.float32)  # [b, V]
             lse = mx.logsumexp(logits, axis=-1, keepdims=True)
-            vocab = logits.shape[-1]
-            idx = mx.argpartition(logits, kth=vocab - K, axis=-1)[:, vocab - K :]
-            vals = mx.take_along_axis(logits, idx, axis=-1)
-            order = mx.argsort(-vals, axis=-1)
-            idx, vals = (
-                mx.take_along_axis(idx, order, axis=-1),
-                mx.take_along_axis(vals, order, axis=-1),
-            )
+            idx, vals = top_k(logits)
             lp = vals - lse
             # logprob of the token that follows each position inside this block (the last one waits)
             nxt = mx.array(tok_np[start + 1 : stop] + [0], dtype=mx.int32)
@@ -289,12 +319,7 @@ def topk_record(logits, forced_next: int | None = None):
 
     lg = logits.reshape(1, -1).astype(mx.float32)
     lse = mx.logsumexp(lg, axis=-1, keepdims=True)
-    vocab = lg.shape[-1]
-    idx = mx.argpartition(lg, kth=vocab - K, axis=-1)[:, vocab - K :]
-    vals = mx.take_along_axis(lg, idx, axis=-1)
-    order = mx.argsort(-vals, axis=-1)
-    idx = mx.take_along_axis(idx, order, axis=-1)
-    vals = mx.take_along_axis(vals, order, axis=-1)
+    idx, vals = top_k(lg)
     lp = vals - lse
     chosen = (
         lg[0, forced_next] - lse[0, 0]
@@ -449,6 +474,22 @@ def _cache_offset(cache) -> int | None:
     return None
 
 
+def flashnext_head(fn, lm, hidden):
+    """Flash-Next logits ``[1, R, V]`` of hidden ``[1, R, hc * D]``, HEAD_ROWS rows per head call.
+
+    The 8-bit head runs the exact verify qmv kernel, which keeps ``R`` rows of accumulators per thread:
+    at R = 128 they spill (1.58 s per block, 101 of the 107 s an 8K window took). Each row's arithmetic
+    does not depend on R (the row-invariant verify head), so the logits are bit-identical; 8 rows take
+    30 ms per 128 (gpuq 1112-220608-00-kldfast-headprobe)."""
+    import mlx.core as mx
+
+    h = hidden[0]
+    rows = int(h.shape[0])
+    return mx.concatenate(
+        [fn.logits(lm, h[i : i + HEAD_ROWS]) for i in range(0, rows, HEAD_ROWS)]
+    )[None]
+
+
 def install_driver(state, record, write_window, reset, expect_file) -> None:
     """The round driver prefills through ``lane_forward`` (one segment per step) instead of the
     upstream prefill: each segment's hidden states go through the driver's own head, in prompt order,
@@ -494,7 +535,7 @@ def install_driver(state, record, write_window, reset, expect_file) -> None:
     # no window is ever recorded ("the capture hook wrote no window").
     from yunshu_engine.round_driver import flashnext as fn
 
-    fn.prefill = hooked(fn.prefill, lambda lm: lambda h: fn.logits(lm, h[0])[None])
+    fn.prefill = hooked(fn.prefill, lambda lm: lambda h: flashnext_head(fn, lm, h))
     prefill_step = rd.RoundDriver._prefill_step
 
     def hooked_prefill_step(self, *args, **kwargs):
