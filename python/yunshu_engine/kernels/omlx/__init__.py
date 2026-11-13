@@ -78,7 +78,7 @@ def is_nax_available() -> bool:
     return ok
 
 
-def pack_projections(model) -> int:
+def pack_projections(model, mtp_engaged: bool = False) -> int:
     """Repack eligible 4-bit dense Qwen3.5 projections for the M5 tensor unit.
 
     Returns the number of packed layers (0 when unsupported). Must run on the
@@ -86,7 +86,7 @@ def pack_projections(model) -> int:
     """
     from . import qwen35_packed_linear
 
-    if not qwen35_packed_linear.enabled(model):
+    if not qwen35_packed_linear.enabled(model, mtp_engaged=mtp_engaged):
         return 0
     return int(qwen35_packed_linear.pack_model(model) or 0)
 

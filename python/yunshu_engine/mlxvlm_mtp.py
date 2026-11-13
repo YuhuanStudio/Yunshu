@@ -40,6 +40,8 @@ def _mlxvlm_has_mtp() -> bool:
 
 
 MTP_TENSOR_PREFIXES = ("mtp.", "language_model.mtp.", "model.mtp.")
+# Qwen3.5 dense and MoE share the MTP layout; the MoE head adds per-expert tensors.
+MTP_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
 
 
 def mtp_head_layers(model_path: str) -> int:
@@ -74,7 +76,7 @@ def mtp_head_problem(model_path: str) -> str | None:
         return f"mtp_num_hidden_layers is 0 or missing ({looked})"
     from .qwen4_family import is_qwen4_family
 
-    if cfg.get("model_type") not in ("qwen3_5", "qwen3_6") and not is_qwen4_family(cfg):
+    if cfg.get("model_type") not in MTP_MODEL_TYPES and not is_qwen4_family(cfg):
         return (
             f"model_type {cfg.get('model_type')!r} has no native MTP loader ({looked})"
         )
@@ -131,8 +133,12 @@ def _tolerant_target_load():
         yield
 
 
-def _load_mtp_head_tensors(model_path: str) -> dict:
-    """Read indexed MTP tensors without copying a drafter onto disk."""
+def _load_mtp_head_tensors(model_path: str, keep_prefix: bool = False) -> dict:
+    """Read indexed MTP tensors without copying a drafter onto disk.
+
+    ``keep_prefix`` keeps the HF ``mtp.`` names, which upstream ``sanitize`` needs
+    (it stacks per-expert MoE tensors and shifts the zero-centred norms only then).
+    """
     import mlx.core as mx
     from safetensors import safe_open
 
@@ -157,7 +163,11 @@ def _load_mtp_head_tensors(model_path: str) -> dict:
             full_shard = mx.load(str(path))
             tensors = {key: full_shard[key] for key in keys}
         for key, value in tensors.items():
-            name = key.removeprefix("language_model.mtp.").removeprefix("mtp.")
+            name = (
+                key.removeprefix("language_model.")
+                if keep_prefix
+                else key.removeprefix("language_model.mtp.").removeprefix("mtp.")
+            )
             sel[name] = value
     if not sel:
         raise ValueError(f"No MTP tensors found in {model_path}")
@@ -211,7 +221,6 @@ def _load_drafter_in_memory(model_path: str):
 
     src_cfg = json.loads((Path(model_path) / "config.json").read_text())
     text_cfg = src_cfg.get("text_config") or {}
-    weights = _load_mtp_head_tensors(model_path)
     config = Qwen3_5MTPConfig.from_dict(
         {
             "model_type": "qwen3_5_mtp",
@@ -221,6 +230,11 @@ def _load_drafter_in_memory(model_path: str):
         }
     )
     drafter = Qwen3_5MTPDraftModel(config)
+    if int(text_cfg.get("num_experts", 0) or 0) > 0:
+        # MoE head: HF per-expert tensors -> switch_mlp stacks (upstream sanitize).
+        weights = drafter.sanitize(_load_mtp_head_tensors(model_path, keep_prefix=True))
+    else:
+        weights = _load_mtp_head_tensors(model_path)
     if any(key.endswith(".scales") for key in weights):
         quant = src_cfg.get("mtplx_mtp_quantization") or src_cfg.get("quantization")
         if not isinstance(quant, dict):

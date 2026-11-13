@@ -160,14 +160,14 @@ def _zero_row(x: mx.array) -> mx.array:
     return z
 
 
-def _install_packed(model: Any) -> int:
+def _install_packed(model: Any, mtp_engaged: bool = False) -> int:
     """Repack eligible 4-bit target projections for the M5 tensor unit and pad
     single-row calls to 2 rows: the packed tensor-unit kernel is row-invariant
     for 2..8 rows (docs/.../nax-packed-invariance.jsonl) but 1 row takes a
     different matvec kernel."""
     from .omlx import pack_projections, qwen35_packed_linear
 
-    packed = pack_projections(model)
+    packed = pack_projections(model, mtp_engaged=mtp_engaged)
     cls = qwen35_packed_linear.PackedLinear
     if packed and not getattr(cls, "_yunshu_invariant_pad", False):
         orig = cls.__call__
@@ -183,13 +183,23 @@ def _install_packed(model: Any) -> int:
     return packed
 
 
-def install(language_model: Any, model: Any = None, packed: bool = False) -> dict:
+def install(
+    language_model: Any,
+    model: Any = None,
+    packed: bool = False,
+    mtp_engaged: bool = False,
+) -> dict:
     """Route the target's decode + verify matmuls through invariant kernels.
 
     ``packed`` (needs the full ``model``) moves eligible 4-bit projections to
     oMLX's NAX packed kernel; remaining quantized projections use sg8.
+    ``mtp_engaged`` admits MoE checkpoints to the packed path (their stock forward is slower).
     """
-    n_packed = _install_packed(model) if packed and model is not None else 0
+    n_packed = (
+        _install_packed(model, mtp_engaged=mtp_engaged)
+        if packed and model is not None
+        else 0
+    )
     import mlx_vlm.speculative.ops.linear as ops
     from mlx_vlm.models import quantized_verifier as qv
     from mlx_vlm.models.qwen3_5 import language as q35

@@ -66,3 +66,21 @@ def test_moe_mlp_runs_each_segment_on_its_own_rows():
         assert tuple(out.shape) == (1, 9, 4)
     finally:
         mx.set_default_device(previous)
+
+
+def test_packed_projection_gate_admits_moe_only_with_engaged_mtp(monkeypatch):
+    # Stock MoE stays off the packed path (measured -5% decode); an engaged MTP drafter admits it.
+    from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl
+
+    monkeypatch.setattr("yunshu_engine.kernels.omlx.is_nax_available", lambda: True)
+
+    class Lang:
+        pass
+
+    Lang.__module__ = "mlx_vlm.models.qwen3_5_moe.language"
+    assert not pl.enabled(Lang())
+    assert pl.enabled(Lang(), mtp_engaged=True)
+    Lang.__module__ = "mlx_vlm.models.qwen3_5.language"
+    assert pl.enabled(Lang())
+    Lang.__module__ = "mlx_vlm.models.gemma4.language"
+    assert not pl.enabled(Lang(), mtp_engaged=True)

@@ -5,7 +5,11 @@ import json
 import mlx.core as mx
 import pytest
 
-from yunshu_engine.mlxvlm_mtp import _build_drafter, is_mtp_capable
+from yunshu_engine.mlxvlm_mtp import (
+    _build_drafter,
+    _load_drafter_in_memory,
+    is_mtp_capable,
+)
 
 
 def test_mtp_detection_requires_indexed_existing_head(tmp_path):
@@ -144,3 +148,91 @@ def test_doctor_reports_speculation_for_every_engine_spec_family(
     monkeypatch.setattr(mlxvlm_mtp, "unindexed_mtp_warning", lambda _p: None)
     checks = check_speculative(str(tmp_path))
     assert checks and checks[0].detail.startswith("MTP head"), checks
+
+
+def test_moe_checkpoint_with_indexed_head_is_mtp_capable(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {"model_type": "qwen3_5_moe", "text_config": {"mtp_num_hidden_layers": 1}}
+        )
+    )
+    (tmp_path / "shard.safetensors").touch()
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc.weight": "shard.safetensors"}})
+    )
+    assert is_mtp_capable(str(tmp_path))
+
+
+# Same suffixes upstream Qwen3_5MTPDraftModel.sanitize shifts by +1 (HF zero-centred norms).
+NORM_SUFFIXES = (
+    ".input_layernorm.weight",
+    ".post_attention_layernorm.weight",
+    ".q_norm.weight",
+    ".k_norm.weight",
+    "norm.weight",
+    "pre_fc_norm_embedding.weight",
+    "pre_fc_norm_hidden.weight",
+)
+
+
+def test_moe_head_loads_hf_per_expert_layout(tmp_path):
+    # HF stores one tensor per expert and zero-centred norms; the in-memory loader must
+    # stack the experts and shift the norms back so every drafter parameter round-trips.
+    from mlx.utils import tree_flatten
+    from mlx_vlm.speculative.drafters.qwen3_5_mtp.config import Qwen3_5MTPConfig
+    from mlx_vlm.speculative.drafters.qwen3_5_mtp.qwen3_5_mtp import (
+        Qwen3_5MTPDraftModel,
+    )
+
+    text = dict(
+        model_type="qwen3_5_moe_text",
+        hidden_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+        linear_num_value_heads=2,
+        linear_num_key_heads=1,
+        linear_key_head_dim=16,
+        linear_value_head_dim=16,
+        linear_conv_kernel_dim=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=32,
+        moe_intermediate_size=32,
+        rms_norm_eps=1e-6,
+        vocab_size=64,
+        max_position_embeddings=4096,
+        mtp_num_hidden_layers=1,
+        tie_word_embeddings=False,
+    )
+    ref = Qwen3_5MTPDraftModel(
+        Qwen3_5MTPConfig.from_dict(
+            {"model_type": "qwen3_5_mtp", "text_config": text, "block_size": 3}
+        )
+    )
+    mx.eval(ref.parameters())
+    hf = {}
+    for name, value in tree_flatten(ref.parameters()):
+        if ".switch_mlp." in name:
+            base, rest = name.split(".switch_mlp.")
+            for e in range(text["num_experts"]):
+                hf[f"mtp.{base}.experts.{e}.{rest}"] = value[e]
+        elif name.endswith(NORM_SUFFIXES):
+            hf[f"mtp.{name}"] = value - 1.0
+        else:
+            hf[f"mtp.{name}"] = value
+    mx.save_safetensors(str(tmp_path / "mtp.safetensors"), hf)
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {k: "mtp.safetensors" for k in hf}})
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "qwen3_5_moe", "text_config": text})
+    )
+
+    loaded = _load_drafter_in_memory(str(tmp_path))
+    got = dict(tree_flatten(loaded.parameters()))
+    want = dict(tree_flatten(ref.parameters()))
+    assert set(got) == set(want)
+    for name in want:
+        assert mx.allclose(got[name], want[name]).item(), name

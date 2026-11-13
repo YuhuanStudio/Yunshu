@@ -793,11 +793,13 @@ def warmup(model: Any) -> None:
 
 
 
-def enabled(model: Any) -> bool:
-    """Dense Qwen3.5-family text model on a GPU with the NAX tensor unit."""
+def enabled(model: Any, mtp_engaged: bool = False) -> bool:
+    """Dense Qwen3.5-family text model on a NAX GPU; MoE only with an engaged MTP drafter (stock MoE is slower)."""
     language = getattr(model, "language_model", model)
     module = type(language).__module__ or ""
-    if not ("qwen3_5" in module or "qwen35" in module) or "moe" in module:
+    if not ("qwen3_5" in module or "qwen35" in module):
+        return False
+    if "moe" in module and not mtp_engaged:
         return False
     try:
         from . import is_nax_available
