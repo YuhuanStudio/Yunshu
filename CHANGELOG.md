@@ -38,9 +38,13 @@ patch release collects them.
 | M5 Max | Qwen3.8-27B MTP, zh-CN 1K | follow-up decode | −4.2 % (one prompt's MTP acceptance changed under the new deps) | deps verification, 06c8cb67b |
 | M5 Max | Flash-Next oQ2.5e, cold prefill | TTFT 8K / 32K / 64K | 8.1 → 5.4 s (8K code), 26.6 → 19.7 s (32K code), 50.5 → 40.3 s (64K code); identity 0 diffs | PLE prefetch on by default, pleprefetch3 |
 | M5 Max | Flash-Next oQ2.5e, decode row cache (`YUNSHU_PLE_ROW_CACHE=200000`, about 100 MB, default) | 8K decode, follow-up TTFT | code +6.4 %, prose +2.9 %, follow-up TTFT -5 % (32K/64K neutral; identity 18 cells, 0 mismatches) | verify run `pledec-cache` |
+| M5 Max | Flash-Next oQ2.5e, 4 concurrent rows | 4K burst4 aggregate decode | greedy 88.3 → 94.4 tok/s (+6.8 %), seeded 69.7 → 77.4 (+11.1 %); solo == concurrent | verify runs `fnops-2c`, `fnops-2i` |
+| M5 Max | Flash-Next oQ2.5e, PLE reads (64 threads, first span read at admission) | cold TTFT | code 1K 1.373 → 1.11 s (−20.6 %), 32K within noise; identity 18 cells | verify run `pleadm-thr` |
+| M5 Max | Qwen3.5-35B MoE, native MTP head (`YUNSHU_VLM_DRAFT=mtp`) | decode, spec off → on | 8K code 84.3 → 133.3 tok/s, 32K code 68.2 → 124.5; cold TTFT unchanged (32K 6.769 → 6.777 s) | verify runs `moe35-graft-sm-ok`, `mtpdefer-35b2` |
 
 ### Added
 
+- Qwen3.5 MoE checkpoints with an MTP head (`qwen3_5_moe`) load it and draft with it on the round driver; draft off is unchanged (identity and KLD equal to the previous release).
 - `yunshu prepare <model>`: one-time repack of Flash-Next's PLE table for faster cold starts (cold TTFT -22..-26% at 1K, -5..-9% at 8K, lossless). It checks free disk first, shows progress and an ETA, skips a finished pack, rebuilds a partial one and `--remove` undoes it. `YUNSHU_PLE_STORAGE` now defaults to `auto`: the prepared copy is used when it matches the checkpoint, `ssd` otherwise (`ssd` forces the repack off); the load log names the storage and why and hints at `yunshu prepare` once. The console's model page has a "Prepare (faster cold start)" action with a prepared badge, progress, cancel and remove (`GET|POST|DELETE /v1/yunshu/models/{id}/prepare`).
 - `/v1/yunshu/status` and `/v1/yunshu/requests/recent` report `dropped`: finished-request rows pushed out of the full 512-row console ring (the oldest row goes first).
 - Opt-in draft-LM (`YUNSHU_DRAFT_MODEL`) and Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) drafters on the round driver's generic layer.
