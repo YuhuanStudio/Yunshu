@@ -166,3 +166,14 @@ class TestExtractHiddenStates:
         arr = mx.ones((1, 5, 64))
         result = engine._extract_hidden_states((arr,))
         assert result.shape == (1, 5, 64)
+
+
+def test_embed_clears_the_mlx_buffer_cache_after_the_batch(monkeypatch):
+    # Row 270: embeddings leave their intermediates in the MLX buffer cache (memory axis).
+    from yunshu_engine import mlx_executor
+
+    calls = []
+    monkeypatch.setattr(mlx_executor, "sync_and_clear_cache", lambda: calls.append(1))
+    engine = _make_loaded_engine()
+    engine.embed(["hello", "world"])
+    assert calls == [1]

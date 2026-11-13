@@ -311,3 +311,24 @@ def test_refusal_survives_the_engine_error_string():
     err = ma.memory_limit_error(ma.MEMORY_LIMIT_MARK + "needs 19 GiB")
     assert isinstance(err, ma.MemoryAdmissionError) and str(err) == "needs 19 GiB"
     assert ma.memory_limit_error("something else") is None
+
+
+def test_kv_bytes_per_token_skips_kv_shared_layers_and_uses_global_head_dim():
+    # Gemma-4-like: the last num_kv_shared_layers reuse earlier KV (add nothing per token);
+    # full-attention layers use num_global_key_value_heads x global_head_dim; sliding layers
+    # are window-bounded and add nothing per token.
+    cfg = {
+        "text_config": {
+            "num_hidden_layers": 4,
+            "layer_types": ["sliding_attention", "full_attention"] * 2,
+            "num_kv_shared_layers": 1,
+            "num_key_value_heads": 2,
+            "num_global_key_value_heads": 1,
+            "num_attention_heads": 8,
+            "head_dim": 256,
+            "global_head_dim": 512,
+            "hidden_size": 2048,
+        }
+    }
+    # own layers: sliding, full, sliding -> one full layer: 2 (K,V) * 2 bytes * 1 * 512
+    assert ma.kv_bytes_per_token(cfg) == 2 * 2 * 1 * 512

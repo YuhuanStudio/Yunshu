@@ -203,25 +203,34 @@ def read_host() -> HostMemory | None:
 
 # ---------------------------------------------------------------- sizing
 def kv_bytes_per_token(config: dict, kv_bytes: int = 2) -> int:
-    """KV bytes one token adds across the attention layers (linear-attention layers keep a
-    fixed state and add nothing per token). 0 when the geometry cannot be read."""
+    """KV bytes one token adds across the attention layers that store their own KV.
+
+    Linear-attention layers keep a fixed state and add nothing per token; the last
+    ``num_kv_shared_layers`` reuse earlier KV and add nothing either. Full-attention layers
+    may use ``global_head_dim`` (and ``num_global_key_value_heads``). 0 when unreadable.
+    """
     tc = config.get("text_config") or config
     layers = int(tc.get("num_hidden_layers") or tc.get("n_layers") or 0)
     if not layers:
         return 0
     types = tc.get("layer_types")
+    shared = int(tc.get("num_kv_shared_layers") or 0)
     if isinstance(types, list) and types:
-        full = sum(1 for t in types if "full" in str(t))
-    elif tc.get("full_attention_interval"):
-        full = layers // int(tc["full_attention_interval"])
+        own = types[: max(0, len(types) - shared)]
+        full = sum(1 for t in own if "full" in str(t))
     else:
-        full = layers
+        interval = int(tc.get("full_attention_interval") or 0)
+        own_layers = max(0, layers - shared)
+        full = own_layers // interval if interval else own_layers
     heads = int(tc.get("num_attention_heads") or 0)
     kvh = int(tc.get("num_key_value_heads") or heads or 0)
     hd = int(
         tc.get("head_dim") or ((tc.get("hidden_size") or 0) // heads if heads else 0)
     )
-    return full * 2 * kvh * hd * kv_bytes
+    global_hd = int(tc.get("global_head_dim") or hd)
+    global_kvh = int(tc.get("num_global_key_value_heads") or kvh)
+    # sliding-window layers are bounded by their window, not per-token growth
+    return 2 * kv_bytes * full * global_kvh * global_hd
 
 
 def activation_bytes_per_token(config: dict) -> int:

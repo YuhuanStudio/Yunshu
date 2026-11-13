@@ -177,6 +177,18 @@ def _gib() -> tuple[float, float]:
     return mx.get_active_memory() / 2**30, mx.get_cache_memory() / 2**30
 
 
+def recommended_wired_limit() -> int:
+    """The system's max recommended working set: the wired limit that keeps weights resident."""
+    import mlx.core as mx
+
+    return int(mx.device_info()["max_recommended_working_set_size"])
+
+
+def wants_wired_limit(model_bytes: int, limit: int) -> bool:
+    """A model above half the working set needs the raised wired limit during generation."""
+    return model_bytes > limit * 0.5
+
+
 _BEAT_OPERAND = None
 _WIRED_BEFORE: int | None = None
 
@@ -186,9 +198,7 @@ def _beat() -> None:
 
     global _BEAT_OPERAND, _WIRED_BEFORE
     if _WIRED_BEFORE is None:
-        _WIRED_BEFORE = mx.set_wired_limit(
-            int(mx.device_info()["max_recommended_working_set_size"])
-        )
+        _WIRED_BEFORE = mx.set_wired_limit(recommended_wired_limit())
         logger.info("idle memory: holding the wired limit until the idle trim")
     if _BEAT_OPERAND is None:
         _BEAT_OPERAND = mx.ones((256, 256))

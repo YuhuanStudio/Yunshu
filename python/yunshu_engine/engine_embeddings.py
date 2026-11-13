@@ -111,6 +111,10 @@ class EngineEmbeddingsMixin:
 
             embeddings.append(pooled.tolist())
 
+        # Row 270: the batch's intermediates would otherwise stay in the MLX buffer cache.
+        from .mlx_executor import sync_and_clear_cache
+
+        sync_and_clear_cache()
         return embeddings
 
     def _compute_prompt_logprobs_sync(  # type: ignore[misc]

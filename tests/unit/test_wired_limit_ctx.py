@@ -15,7 +15,10 @@ from yunshu_engine import batched_engine
 def test_large_model_raises_and_restores_the_wired_limit(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        mx.metal, "recommended_max_working_memory_size", lambda: 100, raising=False
+        mx,
+        "device_info",
+        lambda: {"max_recommended_working_set_size": 100},
+        raising=False,
     )
     monkeypatch.setattr(mx, "set_wired_limit", lambda v: calls.append(v) or 7)
     model = nn.Sequential(nn.Linear(8, 8), nn.Linear(8, 8))  # 2 * (64 + 8) * 4 B > 50
@@ -27,9 +30,31 @@ def test_large_model_raises_and_restores_the_wired_limit(monkeypatch):
 def test_small_model_leaves_the_limit_alone(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        mx.metal, "recommended_max_working_memory_size", lambda: 10**12, raising=False
+        mx,
+        "device_info",
+        lambda: {"max_recommended_working_set_size": 10**12},
+        raising=False,
     )
     monkeypatch.setattr(mx, "set_wired_limit", lambda v: calls.append(v) or 7)
     with batched_engine._wired_limit_ctx(nn.Linear(2, 2)):
         pass
     assert calls == []
+
+
+def test_wired_limit_threshold_is_half_the_recommended_working_set():
+    from yunshu_engine import idle_memory
+
+    assert idle_memory.wants_wired_limit(51, 100) is True
+    assert idle_memory.wants_wired_limit(50, 100) is False
+
+
+def test_recommended_wired_limit_reads_device_info(monkeypatch):
+    from yunshu_engine import idle_memory
+
+    monkeypatch.setattr(
+        mx,
+        "device_info",
+        lambda: {"max_recommended_working_set_size": 123},
+        raising=False,
+    )
+    assert idle_memory.recommended_wired_limit() == 123
