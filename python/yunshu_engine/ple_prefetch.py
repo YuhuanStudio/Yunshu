@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -261,6 +261,10 @@ class PLEPrefetch:
         self._idle = threading.Condition()
         self._blocked_s, self._asked, self._served = 0.0, 0, 0
         self.before = (0.0, 0)
+        # decode-time row cache (rows are byte-identical by id): common tokens repeat across steps
+        self._cap = int(settings.get("YUNSHU_PLE_ROW_CACHE"))
+        self._cache: OrderedDict[int, tuple] = OrderedDict()
+        self.cache_hits = self.cache_lookups = 0
         self._original = table._read_rows
         self._closed = False
         table._read_rows = (
@@ -358,16 +362,66 @@ class PLEPrefetch:
                 self._idle.notify_all()
             self._blocked_s += time.perf_counter() - t0
 
+    def _cached_read(self, row_ids):
+        """Rows outside a prompt span (decode windows): the LRU answers what it holds, the table
+        reads the rest and the LRU keeps them (at most ``YUNSHU_PLE_ROW_CACHE`` rows)."""
+        if not self._cap:
+            return self._original(row_ids)
+        cache = self._cache
+        n = len(row_ids)
+        have: dict[int, tuple] = {}
+        missing: list[int] = []
+        for i, row_id in enumerate(row_ids.tolist()):
+            cached = cache.get(row_id)
+            if cached is None:
+                missing.append(i)
+            else:
+                cache.move_to_end(row_id)
+                have[i] = cached
+        self.cache_lookups += n
+        self.cache_hits += len(have)
+        self._table._hits += len(have)
+        read = self._original(row_ids[missing]) if missing else None
+        proto = read if read is not None else next(iter(have.values()))
+        out = [
+            np.empty((n, a.shape[-1]), dtype=a.dtype)
+            for a in proto  # a row of a cached tuple is 1-D, a read block is 2-D
+        ]
+        for i, cached in have.items():
+            for k, a in enumerate(cached):
+                out[k][i] = a
+        if read is not None:
+            for k in range(len(out)):
+                out[k][missing] = read[k]
+            for j, i in enumerate(missing):
+                cache[int(row_ids[i])] = tuple(
+                    np.array(read[k][j]) for k in range(len(out))
+                )
+            while len(cache) > self._cap:
+                cache.popitem(last=False)
+        return tuple(out)
+
+    def cache_bytes(self) -> int:
+        """Approximate bytes the row LRU holds (row data plus three small arrays' headers each)."""
+        if not self._cache:
+            return 0
+        row = next(iter(self._cache.values()))
+        return int(len(self._cache) * (sum(int(a.nbytes) for a in row) + 3 * 112 + 100))
+
+    def end_span(self) -> None:
+        """The span's graph is built: later reads (decode windows) are not its rows."""
+        self._current = None
+
     def _read_rows_inner(self, row_ids):
         row_ids = np.asarray(row_ids, dtype=np.int64)
         self._asked += len(row_ids)
         entry = self._current
         if not row_ids.size or entry is None:
-            return self._original(row_ids)
+            return self._cached_read(row_ids)
         table = self._table
         hit = np.isin(row_ids, entry.row_ids)
         if not hit.any():
-            return self._original(row_ids)
+            return self._cached_read(row_ids)
         arrays = entry.future.result()  # fail closed: a read error reaches the caller
         pos = np.searchsorted(entry.row_ids, row_ids[hit])
         out = [np.empty((len(row_ids), a.shape[1]), dtype=a.dtype) for a in arrays]

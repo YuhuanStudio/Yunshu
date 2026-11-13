@@ -1770,7 +1770,7 @@ class RoundDriver:
                             wait_s, asked, served = pf.take_stats()
                             logger.info(
                                 "fn_ple span=%d:%d ple_wait=%.1f ms rows=%d prefetched=%d"
-                                " (before: %.1f ms %d rows)",
+                                " (before: %.1f ms %d rows; row cache %d/%d hits, %.1f MB)",
                                 it.start,
                                 it.end,
                                 wait_s * 1e3,
@@ -1778,8 +1778,12 @@ class RoundDriver:
                                 served,
                                 pf.before[0] * 1e3,
                                 pf.before[1],
+                                pf.cache_hits,
+                                pf.cache_lookups,
+                                pf.cache_bytes() / 1e6,
                             )
                     if pf is not None:
+                        pf.end_span()
                         self._ple_lookahead(pf, items, budget)
                     span_t.append(time.perf_counter())
                     if not self.layer.caps.per_token_rows:

@@ -429,4 +429,41 @@ def test_interleaved_table_prefetch_matches_the_ranges_table(tmp_path):
         assert a.dtype == b.dtype and np.array_equal(a, b) and np.array_equal(a, c)
     assert calls == []  # every row came from the buffer
     assert table._misses == reference._misses and table._bytes == reference._bytes
+
+
+def test_decode_row_cache_serves_byte_identical_rows_and_is_bounded(tmp_path):
+    from yunshu_engine import settings
+
+    reference, table = _pair(tmp_path)
+    settings.set_override("YUNSHU_PLE_ROW_CACHE", 5)
+    try:
+        pf = pp.PLEPrefetch(table, _params())
+    finally:
+        settings.clear_overrides()
+    first = np.asarray([3, 9, 27, 40, 41, 77], dtype=np.int64)
+    again = np.asarray([9, 40, 100, 3], dtype=np.int64)
+    for request in (first, again, first):
+        for a, b in zip(
+            table._read_rows(request), reference._read_rows(request), strict=True
+        ):
+            assert a.dtype == b.dtype and np.array_equal(a, b)
+    assert len(pf._cache) <= 5
+    assert pf.cache_lookups == len(first) * 2 + len(again) and pf.cache_hits > 0
+    assert pf.cache_bytes() > 0
+    pf.close()
+
+
+def test_row_cache_default_and_spans_bypass_it(tmp_path):
+    from yunshu_engine import settings
+
+    assert settings.get("YUNSHU_PLE_ROW_CACHE") == 200000  # yv pledec-cache 2026-11-13
+    reference, table = _pair(tmp_path)
+    settings.set_override("YUNSHU_PLE_ROW_CACHE", 0)
+    try:
+        pf = pp.PLEPrefetch(table, _params())
+    finally:
+        settings.clear_overrides()
+    request = np.asarray([1, 2, 3], dtype=np.int64)
+    table._read_rows(request)
+    assert pf.cache_lookups == 0 and not pf._cache  # 0 = off
     pf.close()
