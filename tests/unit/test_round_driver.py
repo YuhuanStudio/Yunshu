@@ -268,9 +268,58 @@ def test_every_step_evaluates_the_caches_it_advanced(tiny, monkeypatch):
         d.step()
         prefill_steps += 1
         if row.pending is None:  # mid-prompt: nothing emitted this step
-            for buf in drv.cache_buffers(row.cache) + drv.cache_buffers(row.mtp_cache):
+            # the head's prompt prefill stays queued (bounded by HEAD_LAZY_MAX) unless it is over the bound
+            head = [] if d._lazy_ids.get(id(row)) else drv.cache_buffers(row.mtp_cache)
+            for buf in drv.cache_buffers(row.cache) + head:
                 assert id(buf) in seen[-1]
     assert prefill_steps >= 2
+
+
+def test_head_prefill_stays_queued_past_the_first_token_and_changes_nothing(
+    tiny, monkeypatch
+):
+    """The MTP head's prompt prefill is not evaluated before a packed row's first token (it ran on
+    the cold-TTFT path); the head cache it builds equals the per-step one, and the tokens of solo,
+    concurrent and spec-off runs are the same either way."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, drafter = tiny
+    real_eval = mx.eval
+
+    def first_step(bound):
+        monkeypatch.setattr(drv, "HEAD_LAZY_MAX", bound)
+        seen: set = set()
+
+        def spy(*arrays):
+            for a in arrays:
+                seen.update(id(x) for x in (a if isinstance(a, (list, tuple)) else [a]))
+            return real_eval(*arrays)
+
+        d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+        d.add(drv.Request(PROMPTS[1], N, handle=0))
+        row = d.rows[0]
+        monkeypatch.setattr(drv.mx, "eval", spy)
+        while row.pending is None:
+            seen.clear()
+            d.step()
+        monkeypatch.setattr(drv.mx, "eval", real_eval)
+        bufs = drv.cache_buffers(row.mtp_cache)
+        evaluated = any(id(b) in seen for b in bufs)
+        mx.eval(*bufs)
+        return d, evaluated, [mx.array(b) for b in bufs]
+
+    d1, lazy_evaluated, lazy_cache = first_step(drv.HEAD_LAZY_MAX)
+    assert all(d1._lazy_ids.values()) and not lazy_evaluated
+    d2, eager_evaluated, eager_cache = first_step(0)
+    assert not any(d2._lazy_ids.values()) and eager_evaluated
+    for a, b in zip(lazy_cache, eager_cache, strict=True):
+        assert mx.array_equal(a, b).item()
+    monkeypatch.setattr(drv, "HEAD_LAZY_MAX", 512 << 20)
+    lazy = _run(lm, drafter, PROMPTS)[0]
+    monkeypatch.setattr(drv, "HEAD_LAZY_MAX", 0)
+    assert _run(lm, drafter, PROMPTS)[0] == lazy
+    assert _run(lm, None, PROMPTS)[0] == lazy
+    assert [_run(lm, drafter, [p])[0][0] for p in PROMPTS] == lazy
 
 
 def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypatch):

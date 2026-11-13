@@ -178,7 +178,8 @@ def test_c6_caps_and_hooks_match_the_census(
     assert PackedLayer.caps.replay and FlashNextLayer.caps.replay
     assert not GenericLayer.caps.replay
     assert GenericLayer.caps.lone_pipelining and not PackedLayer.caps.lone_pipelining
-    assert not PackedLayer.caps.lazy_head and FlashNextLayer.caps.lazy_head
+    assert PackedLayer.caps.lazy_head and FlashNextLayer.caps.lazy_head
+    assert not GenericLayer.caps.lazy_head
     assert FlashNextLayer.caps.fn_trace and not PackedLayer.caps.fn_trace
     assert not GenericLayer.caps.fn_trace
     assert PackedLayer(packed_lm).apc_suffix() == ""

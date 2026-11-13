@@ -109,7 +109,7 @@ def _clear_verify_state() -> None:
     q4.clear_group_sums()
 
 
-HEAD_LAZY_MAX = 512 << 20  # prompt HC bytes a row's queued head prefill may retain
+HEAD_LAZY_MAX = 512 << 20  # prompt hidden bytes a row's queued head prefill may retain
 
 
 def cache_buffers(cache: list) -> list:
@@ -1532,8 +1532,8 @@ class RoundDriver:
         )
 
     def _head_lazy(self, row: _Row, advanced: dict, hidden, items: list) -> bool:
-        """Keep ``row``'s head prefill queued past this step's first token (Flash-Next rows,
-        bounded by HEAD_LAZY_MAX of retained prompt HC states); False evaluates it now."""
+        """Keep ``row``'s head prefill queued past this step's first token (packed and Flash-Next
+        rows, bounded by HEAD_LAZY_MAX of retained prompt hidden states); False evaluates it now."""
         if not self.layer.caps.lazy_head or hidden is None or id(row) not in advanced:
             return False
         row.head_lazy += sum(
@@ -1545,6 +1545,12 @@ class RoundDriver:
         if not lazy:
             row.head_lazy = 0
         self._lazy_ids[id(row)] = lazy
+        if lazy:
+            self.lazy_heads += 1
+            logger.info(
+                "mtp head prefill deferred past the first token (lazy_heads=%d)",
+                self.lazy_heads,
+            )
         return lazy
 
     def _span_reason(self, row: _Row, start: int, end: int) -> str:
@@ -1864,8 +1870,8 @@ class RoundDriver:
             {id(r): heads[id(r)] for r in joined if id(r) in heads}
         )
         arrays = [a for r in self.rows if r.cache for a in cache_buffers(r.cache)]
-        # The MTP head's prompt prefill (one layer over every prompt row, ~3% of a Flash-Next
-        # prefill) stays queued while its HC states fit HEAD_LAZY_MAX: the first token does not
+        # The MTP head's prompt prefill (one layer over every prompt row, 3-5% of a cold prefill)
+        # stays queued while its hidden states fit HEAD_LAZY_MAX: the first token does not
         # wait for it. A row that joins evaluates it in _finish_join, after the token is out.
         arrays += [
             a
@@ -1893,6 +1899,9 @@ class RoundDriver:
         self.steps += 1
         return events
 
+    lazy_heads = (
+        0  # steps whose MTP head prompt prefill stayed queued past the first token
+    )
     ahead_steps = 0  # decode steps taken from a queued next step (pipelined lone rows)
 
     def _lone_blockers(self) -> list[str]:

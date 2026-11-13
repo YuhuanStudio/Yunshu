@@ -137,7 +137,7 @@ class PackedLayer:
         split_invariant=True,
         replay=True,
         ngram=False,
-        lazy_head=False,
+        lazy_head=True,
         lone_pipelining=False,
         slot_decode=True,
         identity_logits=False,
