@@ -46,7 +46,8 @@ class DenseMLP:
 
     def verified(self, verifier: Any, x: mx.array) -> mx.array:
         """The verifier's own feed-forward (a method call: the verify kernels patch it)."""
-        return verifier._feed_forward(self.mlp, x)
+        out: mx.array = verifier._feed_forward(self.mlp, x)
+        return out
 
     def fused(self, x2d: mx.array) -> Any:
         """The fused router + experts attempt. A dense layer has none: the call still runs (its plan check
@@ -68,7 +69,8 @@ class RoutedMoE:
         return _cat([self.mlp(x[:, s:e]) for s, e in spans])
 
     def verified(self, verifier: Any, x: mx.array) -> mx.array:
-        return verifier._feed_forward(self.mlp, x)
+        out: mx.array = verifier._feed_forward(self.mlp, x)
+        return out
 
     def fused(self, x2d: mx.array) -> Any:
         """The fused router + experts (<= MAX_ROWS rows): ``("grouped", ...)`` or None (the caller falls back

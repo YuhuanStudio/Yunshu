@@ -49,7 +49,7 @@ def install(language_model: Any) -> int:
     for layer in getattr(language_model.model, "layers", []):
         mlp = getattr(layer, "mlp", None)
         gate = getattr(mlp, "shared_expert_gate", None)
-        if gate is None:
+        if mlp is None or gate is None:
             continue
         wrapped = wrap(gate)
         if wrapped is not gate:

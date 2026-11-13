@@ -58,7 +58,7 @@ def set_request_echo(value: bool | None) -> None:
     info = current_request_info.get()
     if info is None:
         return
-    info.client_echoes_reasoning = value
+    setattr(info, "client_echoes_reasoning", value)  # noqa: B010 (tracker info is a plain object)
     # the generation may already be registered: its cancel event is what the runner reads
     gen = getattr(info, "gen", None)
     cancel = getattr(gen, "cancel_event", None)
