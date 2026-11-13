@@ -57,6 +57,7 @@ patch release collects them.
 
 ### Fixed
 
+- Flash-Next prefill (round driver): the MoE `shared_expert_gate` (N=1, 8-bit) gave a row different bits for a 3-16 token segment than for a long one, so a prefill tail after an APC hit differed from a cold prefill. The gate is now a row-invariant f32 dot over the bf16 dequantized weight. The numbers change (cross-version drift); identity is checked by `yv ab`.
 - Ragged tile attention (bf16 and int8 KV): a non-finite value stored past a row's length no longer reaches the output through a zero probability (0 * NaN); the row's last 64-key step reads V with zeros past its last key. Outputs on finite caches are unchanged bit for bit.
 - Metal live-buffer limit (`Resource limit (499000) exceeded`): answered as 507 `gpu_resource_limit` with restart guidance instead of an opaque 500.
 - HTTP `logits_processors` (chat, completions, responses, Anthropic messages): processors are Python callables, so any non-empty JSON value failed inside the engine and returned HTTP 200 with empty content. It is now a 400 `invalid_request_error` naming the field; omit it or send `[]`.

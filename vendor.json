@@ -1940,6 +1940,21 @@
     },
     {
       "kind": "patches",
+      "path": "python/yunshu_engine/kernels/sgate_rowwise.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5_moe.language",
+      "symbol": "Qwen3_5MoeSparseMoeBlock._shared_expert_scale",
+      "signature": "(self, x: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.12",
+      "why": "Flash-Next prefill: shared_expert_gate is replaced per instance by a row-invariant f32 dot (stock quantized matmul varies bits with the segment length)",
+      "source_sha256": "8bd993d78120c3076de627fa67fd915e34f012368fb4430553128993d066a12e",
+      "installed_version": "0.7.12"
+    },
+    {
+      "kind": "patches",
       "path": "python/yunshu_engine/kernels/batch_invariant.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",

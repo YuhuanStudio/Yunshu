@@ -128,6 +128,10 @@ def install(
                 if isinstance(module, lane_linear.LaneLinear)
             )
         )
+        # Flash-Next shared gate: row-invariant f32 dot, so a prefill tail == cold prefill.
+        from .kernels import sgate_rowwise
+
+        kernels["sgate_rowwise"] = sgate_rowwise.install(lm) or None
         gdn_prefill.configure_split(split_ready)
         if split_ready:
             gdn_prefill.install_split_forward(lm)
