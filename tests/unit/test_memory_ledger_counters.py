@@ -100,6 +100,12 @@ def test_grammar_token_tables_are_a_named_native_owner(monkeypatch):
 
     monkeypatch.setattr(tcg, "resident_tokenizer_bytes", lambda: 4242)
     monkeypatch.setattr(ledger, "_loaded_models", lambda *args: [])
+    # process-wide stores an earlier test may have filled (restore pool, DFlash window)
+    from yunshu_engine import dflash_apc_window
+    from yunshu_engine.kernels import buffer_cache
+
+    monkeypatch.setattr(dflash_apc_window, "resident_bytes", lambda: 0)
+    monkeypatch.setattr(buffer_cache, "restore_buffer_bytes", lambda: 0)
     monkeypatch.setattr(
         ledger, "mlx_counters", lambda: {"active": 10, "cache": 0, "peak": 10}
     )
