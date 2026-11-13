@@ -1628,6 +1628,12 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         )
     if compaction is not None and compaction["pause"]:
         return _compaction_message(req, compaction)
+    from yunshu_engine.decode_tail_policy import (
+        anthropic_echoes_reasoning,
+        set_request_echo,
+    )
+
+    set_request_echo(anthropic_echoes_reasoning(req.messages))
     temp_files: list[str] = []
     try:
         result = await _create_message(req, request, temp_files)

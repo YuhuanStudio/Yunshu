@@ -102,6 +102,10 @@ class RequestTracker:
                 # are handed (same route as the priority): lookups run, nothing is stored.
                 if not getattr(info, "cache_store", True):
                     gen.cancel_event.cache_store = False  # type: ignore[attr-defined]
+                # the router's read of the request history (True / False / None): the reply's store
+                echo = getattr(info, "client_echoes_reasoning", None)
+                if echo is not None:
+                    gen.cancel_event.client_echoes_reasoning = echo  # type: ignore[attr-defined]
                 info.gen = gen  # type: ignore[attr-defined]
                 info.engine_request_id = request_id  # type: ignore[attr-defined]
                 if getattr(info, "cancel_requested", False):

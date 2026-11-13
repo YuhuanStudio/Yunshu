@@ -1974,6 +1974,9 @@ async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
         stream=req.stream,
     )
 
+    from yunshu_engine.decode_tail_policy import chat_echoes_reasoning, set_request_echo
+
+    set_request_echo(chat_echoes_reasoning(req.messages))
     messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
     has_audio = _has_audio(messages)

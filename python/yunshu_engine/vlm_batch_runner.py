@@ -824,6 +824,9 @@ class VLMBatchRunner:
             priority=getattr(cancel_event, "scheduling_priority", 0),
             cache_plan=prompt_cache_plan,
             cache_store=bool(getattr(cancel_event, "cache_store", True)),
+            client_echoes_reasoning=getattr(
+                cancel_event, "client_echoes_reasoning", None
+            ),
             budget=budget,
             first_delivery=first_delivery,
         )
@@ -1414,6 +1417,41 @@ class VLMBatchRunner:
         )
         return bool(stored)
 
+    def _reasoning_tail_skipped(self, row: Any) -> bool:
+        """No decode-tail store for a reply whose reasoning the client never sends back: its next
+        prompt cannot reach the cache. Cache retention only; outputs are unchanged."""
+        from . import decode_tail_policy as dtp
+
+        if self.__dict__.get("processor") is None:
+            return False  # no tokenizer for the think ids: keep the store, as before
+        policy = self.__dict__.get("_think_ids")
+        if policy is None:
+            policy = self._think_ids = dtp.reasoning_token_ids(
+                getattr(self.processor, "tokenizer", self.processor)
+            )
+        open_id, close_id = policy
+        prompt = list(row.req.ids)
+        generated = list(row.context[len(prompt) :])
+        job = getattr(row.req, "handle", None)
+        # the job is built before the router's reading arrives: the live cancel event holds it
+        cancel = getattr(job, "cancel_event", None)
+        echo = getattr(cancel, "client_echoes_reasoning", None)
+        if echo is None:
+            echo = getattr(job, "client_echoes_reasoning", None)
+        if not dtp.skip_decode_tail(echo, prompt, generated, open_id, close_id):
+            return False
+        dtp.log_once(
+            "reasoning_unechoed",
+            "decode tail not stored: the client sends the history back without reasoning, so a "
+            "reply whose content follows its reasoning cannot be reached by the next prompt",
+        )
+        stats = getattr(getattr(row.apc, "manager", None), "stats", None)
+        if stats is not None:
+            stats.record_reject(
+                "decode_tail_reasoning", tokens=len(prompt) + len(generated)
+            )
+        return True
+
     def _driver_store_decode(self, row: Any) -> bool:
         from .round_driver import flashnext
 
@@ -1427,6 +1465,8 @@ class VLMBatchRunner:
             or row.apc is None
             or not row.req.use_apc
         ):
+            return False
+        if self._reasoning_tail_skipped(row):
             return False
         skip = [
             why
@@ -2120,6 +2160,8 @@ class _Job:
     cache_store: bool = (
         True  # False: look the prefix up, store nothing (X-Yunshu-Cache-Store)
     )
+    # the client sent the chat history back with its reasoning (True), without any (False); None: no history
+    client_echoes_reasoning: bool | None = None
     apc_salt: int | None = None
     out: queue.Queue = field(default_factory=queue.Queue)
     start: float = 0.0

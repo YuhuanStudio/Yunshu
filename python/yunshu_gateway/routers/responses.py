@@ -1695,7 +1695,11 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
+    from yunshu_engine.decode_tail_policy import chat_echoes_reasoning, set_request_echo
+
     from ..sampling_defaults import resolve_sampling
+
+    set_request_echo(chat_echoes_reasoning(_convert_to_messages(req)))
 
     resolve_sampling(req)
     _check_permission(request, "can_infer")

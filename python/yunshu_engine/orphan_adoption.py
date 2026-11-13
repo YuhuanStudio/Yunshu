@@ -27,6 +27,13 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+# what the gateway puts on a request's cancel event and the engines read from the one they are handed
+FORWARDED_CANCEL_ATTRS = (
+    "scheduling_priority",
+    "client_request_id",
+    "cache_store",
+    "client_echoes_reasoning",
+)
 
 # Request fields that do not change what is generated.
 _VOLATILE = frozenset(
@@ -536,7 +543,7 @@ async def run(
         real_cancel.mirror = caller_cancel
         # what the gateway put on the request's cancel event and the engines read from the one
         # they are handed: priority, ids, and the X-Yunshu-Cache-Store: off opt-out
-        for attr in ("scheduling_priority", "client_request_id", "cache_store"):
+        for attr in FORWARDED_CANCEL_ATTRS:
             if hasattr(caller_cancel, attr):
                 setattr(real_cancel, attr, getattr(caller_cancel, attr))
         gen = Generation(key or "", real_cancel)
