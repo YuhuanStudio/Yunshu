@@ -235,7 +235,13 @@ def install_qwen4_gdn() -> bool:
                 original,
             )
 
+        def _gated_delta_rows(self, layer, mixed, spans, masks, caches):
+            return qwen4_gdn.gated_delta_rows(
+                self, layer, mixed, spans, masks, caches, original
+            )
+
         cls._gated_delta = _gated_delta
+        cls._gated_delta_rows = _gated_delta_rows
     return True
 
 
@@ -424,6 +430,8 @@ def uninstall() -> None:
     assert language is not None
     language.Qwen4ExpBatchInvariantForward._model = _STATE["original"]
     saved = _STATE["gdn_original"]
+    if "_gated_delta_rows" in language.Qwen4ExpBatchInvariantForward.__dict__:
+        del language.Qwen4ExpBatchInvariantForward._gated_delta_rows
     if saved is _INHERITED:
         del language.Qwen4ExpBatchInvariantForward._gated_delta
     elif saved is not None:

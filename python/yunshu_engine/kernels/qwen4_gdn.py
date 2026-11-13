@@ -23,7 +23,7 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 MAX_ROWS = 8
-_STATE: dict[str, Any] = {"engaged": 0, "fallback": 0}
+_STATE: dict[str, Any] = {"engaged": 0, "fallback": 0, "packed": 0}
 
 
 def counters() -> dict[str, int]:
@@ -162,6 +162,67 @@ def gated_delta(
             mask is not None,
         )
     return original(verifier, layer, inputs, mask, cache)
+
+
+def _row_ok(inputs: Any, mask: Any, cache: Any) -> bool:
+    """The window of one row may take the fused verify plan (``gated_delta``'s gate)."""
+    from .omlx_q4 import qwen35_gdn_prework as prework
+
+    length = int(inputs.shape[1]) if getattr(inputs, "ndim", 0) == 3 else 0
+    return (
+        mask is None
+        and cache is not None
+        and getattr(cache, "lengths", None) is None
+        and 1 <= length <= MAX_ROWS
+        and prework._qwen4_verify_state_eligible(inputs, cache)
+    )
+
+
+def gated_delta_rows(
+    verifier: Any,
+    layer: Any,
+    mixed: Any,
+    spans: list,
+    masks: list,
+    caches: list,
+    original: Any,
+) -> Any:
+    """``gated_delta`` of several rows' windows packed in ``mixed`` [1, N, D] (row ``b`` at
+    ``spans[b]``, on ``caches[b]`` with ``masks[b]``); returns the branches packed the same way.
+
+    The in- and out-projections run once over every row (row-exact tiles: each row gets its one-row
+    bits whatever the row count, so a row's result equals its own ``gated_delta`` call), so the layer's
+    weights are read once per step instead of once per row; the fused step runs per row on its state.
+    Rows the plan does not admit, or a pack wider than the projection tile, take ``gated_delta`` per row.
+    """
+    from .omlx_q4 import qwen35_gdn_prework as prework
+    from .omlx_q4.row_exact_qmv import MAX_ROWS as QMV_ROWS
+
+    windows = [mixed[:, s:e] for s, e in spans]
+    plan = plan_for(layer) if len(spans) > 1 else None
+    if (
+        plan is None
+        or int(mixed.shape[1]) > QMV_ROWS
+        or not all(
+            _row_ok(w, m, c) for w, m, c in zip(windows, masks, caches, strict=True)
+        )
+    ):
+        parts = [
+            gated_delta(verifier, layer, w, m, c, original)
+            for w, m, c in zip(windows, masks, caches, strict=True)
+        ]
+        return parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=1)
+    in_rows, out_rows = plan[0], plan[1]
+    proj = in_rows(mixed)
+    gated = []
+    for (s, e), cache in zip(spans, caches, strict=True):
+        gated.append(prework._qwen4_verify_step(plan, proj[:, s:e], cache))
+        if hasattr(cache, "advance"):
+            cache.advance(e - s)
+            verifier._helpers()._qwen3_5_advance_lengths_info(cache, e - s)
+    _STATE["engaged"] += len(spans)
+    _STATE["packed"] += 1
+    return out_rows(mx.concatenate(gated, axis=1))
 
 
 def install_cache_patch() -> bool:

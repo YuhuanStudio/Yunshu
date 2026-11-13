@@ -248,6 +248,68 @@ def _prepare(lm: Any, tokens: list, caches: list, media: list | None = None):
     return positions, transactions
 
 
+def qsa_rows(
+    fwd: Any,
+    attention: Any,
+    mixed: mx.array,
+    spans: list,
+    caches: list,
+    positions: list,
+    masks: list,
+) -> list:
+    """Each row's ``_qsa_attention`` over its window of ``mixed`` [1, N, D].
+
+    When every row has the same window width (two or more positions), the indexer and q/k/v
+    projections run once with the rows as the batch axis ([B, w, D]): the verifier's projection
+    keeps the solo call's per-window arithmetic (same window width, the batch only offsets the
+    rows), so each row's slice holds its solo bits, and each row's call takes its slice instead of
+    projecting its window again; attention and the output projection stay per row. Rows of mixed
+    widths, and a narrower slice the verifier projects itself (an ordered-pair split), keep the
+    per-row projection."""
+    windows = [mixed[:, s:e] for s, e in spans]
+    widths = {e - s for s, e in spans}
+    if len(spans) < 2 or len(widths) != 1 or min(widths) < 2:
+        return [
+            fwd._qsa_attention(attention, w, c, p, m)
+            for w, c, p, m in zip(windows, caches, positions, masks, strict=True)
+        ]
+    batched = mixed.reshape(len(spans), widths.pop(), mixed.shape[-1])
+    index_proj = attention.indexer.index_qk_proj
+    qkv = (attention.q_proj, attention.k_proj, attention.v_proj)
+    packed_index = fwd._linear(index_proj, batched)
+    packed_qkv = fwd._linears(qkv, batched)
+    current: dict = {}
+
+    def linear(lin, x):
+        got = current.get("row")
+        if got is not None and x is got[0] and lin is index_proj:
+            return packed_index[got[1] : got[1] + 1]
+        return type(fwd)._linear(fwd, lin, x)
+
+    def linears(lins, x):
+        got = current.get("row")
+        if (
+            got is not None
+            and x is got[0]
+            and len(lins) == 3
+            and all(a is b for a, b in zip(lins, qkv, strict=True))
+        ):
+            return tuple(p[got[1] : got[1] + 1] for p in packed_qkv)
+        return type(fwd)._linears(fwd, lins, x)
+
+    out = []
+    fwd._linear, fwd._linears = linear, linears
+    try:
+        for b, (w, c, p, m) in enumerate(
+            zip(windows, caches, positions, masks, strict=True)
+        ):
+            current["row"] = (w, b)
+            out.append(fwd._qsa_attention(attention, w, c, p, m))
+    finally:
+        del fwd._linear, fwd._linears
+    return out
+
+
 def fused_chain_forward(
     lm: Any, tokens: list, caches: list, capture_ids=(), media: list | None = None
 ):
@@ -310,6 +372,7 @@ def fused_chain_forward(
         h = hidden.reshape(total, width)
         pending = None
         capture = set(capture_ids)
+        packed_gdn = getattr(fwd, "_gated_delta_rows", None) if len(spans) > 1 else None
         features: list = []
         for index, layer in enumerate(model.layers):
             hn, ssp = norm(h, pending)
@@ -333,28 +396,37 @@ def fused_chain_forward(
                 _, ssp = norm(hn)
             mixed, inject = project(hn, ssp, layer.attn_hyper_connection)
             mixed = mixed.reshape(1, total, dims)
-            parts = []
-            for b, (s, e) in enumerate(spans):
+            if layer.is_linear and packed_gdn is not None:
+                # one projection pass over every row's window (row-exact tiles)
+                branch = packed_gdn(
+                    layer.linear_attn,
+                    mixed,
+                    spans,
+                    ssm_masks,
+                    [c[index] for c in caches],
+                )
+            else:
                 if layer.is_linear:
-                    parts.append(
+                    parts = [
                         fwd._gated_delta(
                             layer.linear_attn,
                             mixed[:, s:e],
                             ssm_masks[b],
                             caches[b][index],
                         )
-                    )
+                        for b, (s, e) in enumerate(spans)
+                    ]
                 else:
-                    parts.append(
-                        fwd._qsa_attention(
-                            layer.self_attn,
-                            mixed[:, s:e],
-                            caches[b][index],
-                            positions[b],
-                            fa_masks[b],
-                        )
+                    parts = qsa_rows(
+                        fwd,
+                        layer.self_attn,
+                        mixed,
+                        spans,
+                        [c[index] for c in caches],
+                        positions,
+                        fa_masks,
                     )
-            branch = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=1)
+                branch = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=1)
             hn2, ssp2 = norm(hn, ("plain", (branch.reshape(total, dims),), inject))
             mixed, inject2 = project(hn2, ssp2, layer.mlp_hyper_connection)
             fused = tfh._moe(layer.mlp, mixed)
@@ -675,7 +747,7 @@ class FlashNextHead:
         the target's next tokens, ``hidden`` [B, T, hc * D] its HC states). Keys go to ``hn ..
         hn + T - 1``; once ``used`` is known the caller advances ``hn`` and the rest is overwritten by
         the next window. Returns the head HC states [B, T, hc * D] and the greedy token of each [B, T]."""
-        states, greedy = [], []
+        states, mixes = [], []
         for b, row in enumerate(rows):
             cache = self.caches[id(row)]
             self._sync(cache, row.hn)
@@ -683,10 +755,12 @@ class FlashNextHead:
                 cache, tokens[b : b + 1], hidden[b : b + 1], row.req.rope_delta
             )
             states.append(state[0])
-            greedy.append(
-                mx.argmax(self._mix_logits(mixed[0]), axis=-1).astype(mx.int32)
-            )
-        return mx.stack(states), mx.stack(greedy)
+            mixes.append(mixed[0])
+        # one LM-head pass for every row's positions (row-invariant head: a row's logits are its solo bits)
+        width = int(tokens.shape[1])
+        mixed = mixes[0] if len(mixes) == 1 else mx.concatenate(mixes, axis=0)
+        greedy = mx.argmax(self._mix_logits(mixed), axis=-1).astype(mx.int32)
+        return mx.stack(states), greedy.reshape(len(rows), width)
 
     def draft(
         self,

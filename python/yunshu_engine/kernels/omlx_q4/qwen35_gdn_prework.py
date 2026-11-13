@@ -1726,9 +1726,16 @@ def _qwen4_verify(plan, inputs, cache):
     and committed rollback states (the conv window, and the per-step
     recurrent states or their deferred recomputation) to the per-op verify
     path below."""
+    in_rows, out_rows = plan[0], plan[1]
+    return out_rows(_qwen4_verify_step(plan, in_rows(inputs), cache))
+
+
+def _qwen4_verify_step(plan, proj, cache):
+    """``_qwen4_verify`` between its two projections: the fused step of one row's projected window
+    ``proj`` [1, S, C] on that row's cache; returns the gated output the out-projection reads."""
     (
-        in_rows,
-        out_rows,
+        _,
+        _,
         conv_w,
         q_scale,
         A_log,
@@ -1740,7 +1747,6 @@ def _qwen4_verify(plan, inputs, cache):
         dk,
         dv,
     ) = plan
-    proj = in_rows(inputs)
     steps = proj.shape[1]
     conv_start, start = cache[0], cache[1]
     deferred = (
@@ -1765,7 +1771,7 @@ def _qwen4_verify(plan, inputs, cache):
     else:
         cache.record_speculative_states(1, states, state)
     cache[1] = state
-    return out_rows(gated)
+    return gated
 
 
 def _qwen4_state_after(
