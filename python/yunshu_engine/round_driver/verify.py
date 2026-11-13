@@ -14,6 +14,7 @@ from typing import Any
 import mlx.core as mx
 
 from .. import tree_verify as tv
+from ..blocks.mlp import block_for
 
 # The packed verify's row limit. The lane's fast tree widened to 64 rows (copy rounds,
 # tree_verify.FAST_MAX_ROWS) with a one-row bit-equality probe; the driver's multi-row packs were
@@ -131,7 +132,9 @@ def forward(lm, windows: list[Window], capture_ids=(), *, verifier=None):
                 r = verifier._linear(a.o_proj, mx.concatenate(mixed, axis=1))
             # The lane's fused add/RMS has the same arithmetic as these ops.
             h = h + r
-            h = h + verifier._feed_forward(layer.mlp, layer.post_attention_layernorm(h))
+            h = h + block_for(layer.mlp).verified(
+                verifier, layer.post_attention_layernorm(h)
+            )
             if i in capture:
                 for res, (s, e) in zip(results, offsets, strict=True):
                     res.captured.append(h[:, s:e])

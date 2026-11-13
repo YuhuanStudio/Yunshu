@@ -35,6 +35,7 @@ import numpy as np
 
 from .. import tree_verify as tv
 from ..blocks.kv import _scatter_rows
+from ..blocks.mlp import block_for
 from ..kernels import ragged_attention as ra
 from .decode_set import DecodeSet
 
@@ -504,7 +505,9 @@ class DecodeBatch(DecodeSet):
                     None
                 ]
             h = x + r
-            x = h + verifier._feed_forward(layer.mlp, layer.post_attention_layernorm(h))
+            x = h + block_for(layer.mlp).verified(
+                verifier, layer.post_attention_layernorm(h)
+            )
         self._last = {"recs": recs, "lens": lens, "T": T}
         return cast(mx.array, model.norm(x)[0])
 

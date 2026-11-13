@@ -28,6 +28,7 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from ..blocks.mlp import block_for
 from ..qwen4_family import is_qwen4_type, qwen4_first_module
 from .decode_set import DecodeSet
 from .verify import DRIVER_MAX_ROWS
@@ -221,6 +222,19 @@ def _fused_ready(lm: Any, dtype: Any) -> bool:
     )
 
 
+_MLP_BLOCKS: dict[int, tuple[Any, list]] = {}
+
+
+def _mlp_blocks(lm: Any) -> list:
+    """Each layer's MLP block, resolved once per language model (the table keeps the model alive, so its id
+    is not reused while the entry exists)."""
+    hit = _MLP_BLOCKS.get(id(lm))
+    if hit is None or hit[0] is not lm:
+        hit = (lm, [block_for(layer.mlp) for layer in lm.model.layers])
+        _MLP_BLOCKS[id(lm)] = hit
+    return hit[1]
+
+
 def _prepare(lm: Any, tokens: list, caches: list, media: list | None = None):
     """Per row: the position ids and a speculative cache transaction (``_speculative_verify``'s prologue).
 
@@ -374,6 +388,7 @@ def fused_chain_forward(
         capture = set(capture_ids)
         packed_gdn = getattr(fwd, "_gated_delta_rows", None) if len(spans) > 1 else None
         features: list = []
+        blocks = _mlp_blocks(lm)
         for index, layer in enumerate(model.layers):
             hn, ssp = norm(h, pending)
             if "ple" in layer:
@@ -429,9 +444,10 @@ def fused_chain_forward(
                 branch = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=1)
             hn2, ssp2 = norm(hn, ("plain", (branch.reshape(total, dims),), inject))
             mixed, inject2 = project(hn2, ssp2, layer.mlp_hyper_connection)
-            fused = tfh._moe(layer.mlp, mixed)
+            block = blocks[index]
+            fused = block.fused(mixed)
             if fused is None:
-                branch2 = fwd._feed_forward(layer.mlp, mixed.reshape(1, total, dims))
+                branch2 = block.verified(fwd, mixed.reshape(1, total, dims))
                 fused = ("plain", (branch2.reshape(total, dims),))
             h = hn2
             pending = (fused[0], fused[1], inject2)

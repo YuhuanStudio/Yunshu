@@ -211,17 +211,10 @@ def _project(
 
 
 def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]) -> mx.array:
-    from mlx_vlm.models.qwen3_5.language import swiglu
+    # the layer's MLP block (blocks/mlp.py): routed experts run per segment, dense SwiGLU per projection
+    from ..blocks.mlp import block_for
 
-    if hasattr(mlp, "switch_mlp"):
-        # Sparse MoE block: router, routed experts and shared expert run per segment, so a segment's
-        # rows get what they would as the only segment of a step (an expert matmul groups the tokens it
-        # is given: packing segments would make a row depend on its neighbours).
-        return _cat([mlp(x[:, s:e]) for s, e in spans])
-    h = swiglu(
-        _project(mlp.gate_proj, x, spans, lane), _project(mlp.up_proj, x, spans, lane)
-    )
-    return _project(mlp.down_proj, h, spans, lane)
+    return block_for(mlp).packed(x, spans, lane)
 
 
 def forward(
