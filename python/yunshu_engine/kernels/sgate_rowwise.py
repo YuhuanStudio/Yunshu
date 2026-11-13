@@ -1,3 +1,4 @@
+# Upstream (inspired): Blaizzy/mlx-vlm (MIT), Qwen3_5MoeSparseMoeBlock shared_expert_gate (see vendor.json)
 """Row-invariant ``shared_expert_gate`` for Flash-Next prefill (N=1 quantized linear).
 
 Stock quantized matmul gives a row different bits for M=3..16 than for M=512, so a prefill
@@ -46,7 +47,7 @@ def wrap(linear: Any) -> Any:
 def install(language_model: Any) -> int:
     """Wrap every MoE block's ``shared_expert_gate`` in ``language_model``; returns the count."""
     count = 0
-    for layer in getattr(language_model.model, "layers", []):
+    for layer in getattr(getattr(language_model, "model", None), "layers", []):
         mlp = getattr(layer, "mlp", None)
         gate = getattr(mlp, "shared_expert_gate", None)
         if mlp is None or gate is None:

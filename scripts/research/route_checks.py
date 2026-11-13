@@ -67,6 +67,7 @@ EXEMPT: dict[str, str] = {
     "GET /console": "deprecated pointer to the console process (redirect or how-to page); tests/unit/test_console_pointer.py, and scripts/research/console_real_server.py checks the process itself",
     "GET /console/": "same pointer as GET /console",
     "GET /console/{rest:path}": "same pointer as GET /console",
+    "DELETE /v1/yunshu/models/{model_id:path}/prepare": "removes a ~32 GB prepared copy, so no route check calls it; remove, cancel and 409-while-loaded in tests/unit/test_ple_prepare.py",
 }
 
 
@@ -581,6 +582,33 @@ def _console_downloads(c: Ctx):
         d.status_code == 200 and d.json()["state"] == "done",
         f"{d.status_code} {d.text[:100]}",
     )
+
+
+@check(
+    "console_prepare",
+    "GET /v1/yunshu/models/{model_id:path}/prepare",
+    "POST /v1/yunshu/models/{model_id:path}/prepare",
+    served=True,
+)
+def _console_prepare(c: Ctx):
+    r = c.req("GET", f"/v1/yunshu/models/{c.model}/prepare")
+    expect(r.status_code == 200, f"prepare status {r.status_code} {r.text[:100]}")
+    j = r.json()
+    if not j.get("applicable"):
+        skip("the loaded model has no PLE table (Flash-Next only)")
+    expect(isinstance(j.get("prepared"), bool), f"prepare prepared {j}")
+    expect(j.get("storage") in ("ssd", "ssd-rows", "memory"), f"prepare storage {j}")
+    expect(
+        j.get("table_bytes", 0) > 0 and j.get("free_bytes", 0) > 0, f"prepare sizes {j}"
+    )
+    if not j["prepared"]:
+        skip("not prepared: starting a ~32 GB repack is not a route check")
+    p = c.req("POST", f"/v1/yunshu/models/{c.model}/prepare")
+    expect(p.status_code in (200, 202), f"prepare start {p.status_code} {p.text[:100]}")
+    expect(
+        p.json().get("prepared") is True, f"prepare on a prepared model {p.text[:200]}"
+    )
+    expect(j["storage"] == "ssd-rows", f"prepared but storage {j['storage']}")
 
 
 @check(

@@ -1827,6 +1827,7 @@
     "python/yunshu_engine/kernels/gdn_rows.py": "alias of blocks/recurrent.py (M3c): nothing in the package imports the old name; kept for test_gdn_rows"
   },
   "modules_other": {
+    "python/yunshu_engine/kernels/sgate_rowwise.py": "Flash-Next shared_expert_gate as a per-row f32 dot so prefill is split-invariant (correctness, installed by serving_kernels for every qwen4 path; no fast/slow alternative to route)",
     "python/yunshu_engine/kernels/gdn_qk_eps.py": "GDN q/k RMS epsilon measured from the installed mlx-vlm and rendered into gdn_prefill._NORM_SCALE_SOURCE and the RMS arm of qwen35_gdn_prework, so a mlx-vlm bump (b8bf04c) flips stock and fused together (value unchanged on 0.7.8)",
     "python/yunshu_engine/apc_restore_cost.py": "media checkpoint restore admission (APC media path; cost model only, decides reuse not numerics)",
     "python/yunshu_engine/dflash_context.py": "DFlash prefill capture and context window (part of dflash path)",

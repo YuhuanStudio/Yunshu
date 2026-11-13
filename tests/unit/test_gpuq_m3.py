@@ -578,7 +578,7 @@ def test_m3_waits_for_idle_laptop(queue, monkeypatch):
 def test_m3_idle_probe_only_when_m3_work_waits(queue, monkeypatch):
     monkeypatch.setenv("GPUQ_M3_IDLE_S", "300")
     monkeypatch.setattr(queue, "_m3_idle_cache", {"at": -1e9, "ok": False})
-    queue.submit(["true"], "m5 only", 1, 0)
+    queue.submit(["true"], "m5-only", 1, 0)
 
     def boom(env):
         raise AssertionError("probed with no M3 work pending")
