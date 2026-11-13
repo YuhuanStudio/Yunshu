@@ -24,12 +24,34 @@ def _drop_empty_subsections(body: str) -> str:
     return "\n\n".join(k for k in kept if k)
 
 
-def previous_dev(version: str) -> str | None:
-    """The dev release before ``version`` (X.Y.Z.devN -> X.Y.Z.dev(N-1)); None for dev1 or a patch."""
+def previous_dev(version: str, published: set[str] | None = None) -> str | None:
+    """The published dev release before ``version``; None for dev1 or a patch.
+
+    ``published`` is the set of versions on PyPI: a dev tag whose release run failed was never
+    published, so its successor's notes start from the last one that was. Without the set (offline)
+    it is X.Y.Z.dev(N-1)."""
     m = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)\.dev([0-9]+)", version)
     if not m or int(m.group(2)) <= 1:
         return None
-    return f"{m.group(1)}.dev{int(m.group(2)) - 1}"
+    for n in range(int(m.group(2)) - 1, 0, -1):
+        candidate = f"{m.group(1)}.dev{n}"
+        if published is None or candidate in published:
+            return candidate
+    return None
+
+
+def published_versions(package: str = "yunshu") -> set[str] | None:
+    """Versions on PyPI, or None when PyPI cannot be read."""
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            f"https://pypi.org/pypi/{package}/json", timeout=20
+        ) as r:
+            return set(json.load(r).get("releases", {}))
+    except Exception:
+        return None
 
 
 def _section_body(changelog: str, section: str) -> str:
@@ -107,7 +129,10 @@ def kept_table_row(kept: list[str]) -> bool:
 
 
 def render_notes(
-    changelog: str, version: str, previous_changelog: str | None = None
+    changelog: str,
+    version: str,
+    previous_changelog: str | None = None,
+    since: str | None = None,
 ) -> str:
     """Fail closed on absent versions and derive the comparison from the older entry."""
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(\.dev[0-9]+)?", version):
@@ -132,7 +157,7 @@ def render_notes(
     # The renderer owns the footer, so copied draft compare links cannot survive.
     body = re.sub(r"^\[Full changelog[^\n]*\n?", "", body, flags=re.MULTILINE).rstrip()
     body = _drop_empty_subsections(body)
-    since = previous_dev(version)
+    since = since or previous_dev(version)
     if since and previous_changelog is not None:
         body = (
             f"Changes since {since}. The next patch release collects every dev release.\n\n"
@@ -195,10 +220,14 @@ def main() -> None:
         type=Path,
         help="CHANGELOG.md at the previous dev tag: a devN (N > 1) lists only what is new since it",
     )
+    parser.add_argument(
+        "--since",
+        help="the previous published dev version (default: devN-1); a failed, unpublished tag is skipped",
+    )
     args = parser.parse_args()
     previous = args.previous_changelog.read_text() if args.previous_changelog else None
     args.output.write_text(
-        render_notes(args.changelog.read_text(), args.version, previous)
+        render_notes(args.changelog.read_text(), args.version, previous, args.since)
     )
 
 

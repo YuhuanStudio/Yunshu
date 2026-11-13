@@ -131,6 +131,11 @@ def test_a_later_dev_release_lists_only_what_is_new_since_the_previous_one():
         previous_dev("0.1.8.dev2") == "0.1.8.dev1"
         and previous_dev("0.1.8.dev1") is None
     )
+    # v0.1.8.dev3's release run failed and it was never published: dev4 starts from dev2
+    assert previous_dev("0.1.8.dev4", {"0.1.8.dev1", "0.1.8.dev2"}) == "0.1.8.dev2"
+    assert "Changes since 0.1.8.dev1" in render_notes(
+        dev2, "0.1.8.dev3", dev1, "0.1.8.dev1"
+    )
     assert "Changes since 0.1.8.dev1" in notes
     assert "- New fix in dev2." in notes and "Old fix shipped in dev1" not in notes
     assert "| M5 | new row | 3 -> 4 |" in notes and "old row" not in notes

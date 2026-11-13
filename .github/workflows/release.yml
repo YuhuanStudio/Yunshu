@@ -140,10 +140,10 @@ jobs:
           path: dist/
       - name: Release notes from CHANGELOG.md
         run: |
-          # a devN (N > 1) lists only what is new since dev(N-1)
-          PREV=$(python3 -c "import sys; sys.path.insert(0, 'scripts/release'); import notes; print(notes.previous_dev('${TAG#v}') or '')")
+          # a devN (N > 1) lists only what is new since the previous PUBLISHED dev (a failed tag is skipped)
+          PREV=$(python3 -c "import sys; sys.path.insert(0, 'scripts/release'); import notes; print(notes.previous_dev('${TAG#v}', notes.published_versions()) or '')")
           if [ -n "$PREV" ] && git show "v$PREV:CHANGELOG.md" > prev_changelog.md 2>/dev/null; then
-            python3 scripts/release/notes.py "${TAG#v}" --previous-changelog prev_changelog.md --output notes.md
+            python3 scripts/release/notes.py "${TAG#v}" --previous-changelog prev_changelog.md --since "$PREV" --output notes.md
           else
             python3 scripts/release/notes.py "${TAG#v}" --output notes.md
           fi
