@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 from . import paths, settings
@@ -61,6 +62,37 @@ def manifest_for(model_path: Path) -> Path:
     return target
 
 
+def rows_manifest_for(model_path: Path) -> Path:
+    """Build (once) and return the manifest of the repacked one-record-per-row PLE table
+    (``interleaved_q4``) for ``model_path``; its data file sits beside it."""
+    index_path = model_path / "model.safetensors.index.json"
+    root = settings.get("YUNSHU_PLE_ROWS_DIR")
+    base = Path(root) if root else paths.home() / "cache" / "ple"
+    target = base / _cache_key(model_path, index_path) / "ple-rows.json"
+    if target.exists():
+        return target
+    ple_storage = qwen4_first_module("ple_storage")
+    if ple_storage is None:
+        raise ImportError("no Qwen4 ple_storage module")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f"ple-rows.{os.getpid()}.partial.json")
+    data = target.parent / "ple-q4.rows"
+    if data.exists():
+        data.unlink()  # a data file without its manifest is an interrupted build
+    started = time.monotonic()
+    logger.info("Qwen4 PLE: repacking the n-gram table into %s (one time)", data)
+    ple_storage.materialize_interleaved_ple_store(
+        model_path, partial, data_file=data.name
+    )
+    os.replace(partial, target)  # the manifest appears only after the data is complete
+    logger.info(
+        "Qwen4 PLE: repacked %.1f GB in %.0f s",
+        data.stat().st_size / 1e9,
+        time.monotonic() - started,
+    )
+    return target
+
+
 def external_ple(config: dict, model_path) -> bool:
     """Switch ``config`` to row-wise PLE reads from the pack's files when that applies.
 
@@ -70,7 +102,8 @@ def external_ple(config: dict, model_path) -> bool:
     text = config.get("text_config")
     if not isinstance(text, dict) or text.get("ple_storage"):
         return False
-    if settings.get("YUNSHU_PLE_STORAGE") != "ssd":
+    storage = settings.get("YUNSHU_PLE_STORAGE")
+    if storage not in ("ssd", "ssd-rows"):
         return False
     model_path = Path(model_path)
     index_path = model_path / "model.safetensors.index.json"
@@ -79,7 +112,11 @@ def external_ple(config: dict, model_path) -> bool:
     weight_map = json.loads(index_path.read_text()).get("weight_map") or {}
     if not any(PLE_MARKER in key for key in weight_map):
         return False
-    manifest = manifest_for(model_path)
+    manifest = (
+        rows_manifest_for(model_path)
+        if storage == "ssd-rows"
+        else manifest_for(model_path)
+    )
     text["ple_storage"] = {"manifest": str(manifest), "cache_rows": 0}
     quantization = config.get("quantization")
     if isinstance(quantization, dict):
@@ -112,7 +149,7 @@ def bytes_read_from_files(model_path) -> int:
         if (
             not is_qwen4_family(config)
             or (config.get("text_config") or {}).get("ple_storage")
-            or settings.get("YUNSHU_PLE_STORAGE") != "ssd"
+            or settings.get("YUNSHU_PLE_STORAGE") not in ("ssd", "ssd-rows")
         ):
             return 0
         weight_map = json.loads(

@@ -5,10 +5,11 @@ a memmap, one (shard, tensor) at a time: a token touches 16 head rows x 3 tensor
 faults (~150 us each on the SSD, ~7 ms per token measured on M5 Max). Rows are random, so a repeated
 prompt hides this through the row LRU while fresh text pays it on every step.
 
-This replaces ``_read_rows`` for the ``safetensors_ranges`` layout with ``pread`` calls issued from a
-thread pool (the GIL is released inside the syscall), so the faults overlap. The bytes read, the
-returned arrays, the row cache and every counter are identical to upstream's; only the order in
-which the reads happen differs. The interleaved layout and any other layout keep upstream's code.
+This replaces ``_read_rows`` with ``pread`` calls issued from a thread pool (the GIL is released
+inside the syscall), so the faults overlap: for the ``safetensors_ranges`` layout three reads per row
+(weight, scales, biases sit in different tensors), for the ``interleaved_q4`` layout (one record per
+row, ``YUNSHU_PLE_STORAGE=ssd-rows``) one. The bytes read, the returned arrays, the row cache and every
+counter are identical to upstream's; only the order in which the reads happen differs.
 """
 
 # Patches upstream (MIT): mlx-vlm qwen4_exp/ple_storage.py QuantizedMMapNGramEmbedding._read_rows
@@ -120,6 +121,82 @@ def parallel_read_rows(table, row_ids, threads: int, dtypes: dict):
     return tuple(out[name] for name in names)
 
 
+def interleaved_columns(table, dtypes: dict, raw: np.ndarray) -> list:
+    """Split ``raw`` [n, row_stride] interleaved records into the table's tensors, as upstream's
+    ``_read_rows`` does for the ``interleaved_q4`` layout."""
+    packed = table.row_width // 2
+    columns, offset = [], 0
+    for name, dtype_name in table._tensor_layout:
+        width = (
+            packed
+            if name == "weight"
+            else table.row_width // table._group_size * dtypes[dtype_name].itemsize
+        )
+        columns.append(
+            raw[:, offset : offset + width]
+            .reshape(len(raw), -1)
+            .view(dtypes[dtype_name])
+        )
+        offset += width
+    return columns
+
+
+def parallel_read_rows_interleaved(table, row_ids, threads: int, dtypes: dict):
+    """``_read_rows`` for the ``interleaved_q4`` layout: one ``pread`` of a row's whole record
+    (weight, scales and biases together) instead of three, from a thread pool. Same bytes, counters
+    and row cache as upstream's fancy index on the memmap."""
+    row_ids = np.asarray(row_ids, dtype=np.int64)
+    if row_ids.ndim != 1:
+        raise ValueError("row_ids must be one-dimensional")
+    store = table._interleaved
+    stride = int(store.shape[1])
+    n = len(row_ids)
+    cached_rows: dict[int, tuple] = {}
+    missing_positions: list[int] = []
+    missing_ids: list[int] = []
+    for position, row_id in enumerate(row_ids.tolist()):
+        cached = table._cache.get(row_id)
+        if cached is None:
+            missing_positions.append(position)
+            missing_ids.append(row_id)
+            continue
+        table._hits += 1
+        table._cache.move_to_end(row_id)
+        cached_rows[position] = cached
+    raw = np.empty((len(missing_ids), stride), dtype=np.uint8)
+    if missing_ids:
+        fd = _fd(table, str(store.filename))
+        base = int(store.offset)
+        flat = [
+            (fd, base + row_id * stride, memoryview(raw[i]))
+            for i, row_id in enumerate(missing_ids)
+        ]
+        lanes = max(1, min(threads, len(flat)))
+        chunks = [flat[i::lanes] for i in range(lanes)]
+        futures = [
+            _pool(table, threads).submit(_read_chunk, chunk) for chunk in chunks[1:]
+        ]
+        _read_chunk(chunks[0])
+        for future in futures:
+            future.result()
+        table._bytes += raw.nbytes
+    table._misses += len(missing_ids)
+    loaded = interleaved_columns(table, dtypes, raw)
+    out = [np.empty((n, column.shape[1]), dtype=column.dtype) for column in loaded]
+    for k, column in enumerate(loaded):
+        if missing_positions:
+            out[k][missing_positions] = column
+        for position, row in cached_rows.items():
+            out[k][position] = row[k]
+    if table.cache_rows:
+        for i, row_id in enumerate(missing_ids):
+            table._cache[row_id] = tuple(np.array(c[i], copy=True) for c in loaded)
+            table._cache.move_to_end(row_id)
+            while len(table._cache) > table.cache_rows:
+                table._cache.popitem(last=False)
+    return tuple(out)
+
+
 def install(threads: int) -> bool:
     """Patch upstream's ``_read_rows`` to read in parallel; 0 restores upstream. True if active."""
     try:
@@ -142,7 +219,11 @@ def install(threads: int) -> bool:
         dtypes = ple_storage._DTYPES
 
         def _read_rows(self, row_ids):
-            if self._interleaved is not None or not self._shards or not len(row_ids):
+            if not len(row_ids):
+                return original(self, row_ids)
+            if self._interleaved is not None:
+                return parallel_read_rows_interleaved(self, row_ids, threads, dtypes)
+            if not self._shards:
                 return original(self, row_ids)
             return parallel_read_rows(self, row_ids, threads, dtypes)
 

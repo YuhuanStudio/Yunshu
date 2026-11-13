@@ -29,7 +29,7 @@ from . import settings
 
 logger = logging.getLogger(__name__)
 
-MAX_PENDING = 2  # spans read ahead at most (the bounded buffer)
+MAX_PENDING = 4  # spans read ahead at most, over all prompts (the bounded buffer)
 
 
 class PrefetchCancelledError(Exception):
@@ -123,11 +123,18 @@ class _RowReader:
             self._fds.clear()
 
     def read(
-        self, row_ids: np.ndarray, cancel: threading.Event, pool=None, slices: int = 1
+        self,
+        row_ids: np.ndarray,
+        cancel: threading.Event,
+        pool=None,
+        slices: int = 1,
+        gate=None,
     ) -> tuple:
         """All rows of ``row_ids``; with ``pool`` the id range is split in ``slices`` parallel parts
         (``pread`` drops the GIL), as ``ple_parallel`` reads them on the foreground path."""
         table = self._table
+        if table._interleaved is not None:
+            return self._read_interleaved(row_ids, cancel, pool, slices, gate)
         names = table._tensor_names
         layout = dict(table._tensor_layout)
         dtypes = self._module._DTYPES
@@ -142,7 +149,7 @@ class _RowReader:
         starts = np.asarray([s[0] for s in shards], dtype=np.int64)
 
         def part(lo: int, hi: int) -> None:
-            self._fill(out, names, shards, starts, row_ids, lo, hi, cancel)
+            self._fill(out, names, shards, starts, row_ids, lo, hi, cancel, gate)
 
         n = len(row_ids)
         if pool is None or slices <= 1 or n < 2 * slices:
@@ -157,11 +164,53 @@ class _RowReader:
                 f.result()
         return tuple(out[name] for name in names)
 
-    def _fill(self, out, names, shards, starts, row_ids, lo, hi, cancel) -> None:
+    def _read_interleaved(self, row_ids, cancel, pool, slices, gate) -> tuple:
+        """``read`` for the ``interleaved_q4`` layout: one ``pread`` per row record."""
+        from .ple_parallel import interleaved_columns
+
+        store = self._table._interleaved
+        stride = int(store.shape[1])
+        raw = np.empty((len(row_ids), stride), dtype=np.uint8)
+        fd = self._fd(str(store.filename))
+        base = int(store.offset)
+
+        def part(lo: int, hi: int) -> None:
+            for position in range(lo, hi):
+                if position % 16 == 0:
+                    if gate is not None:
+                        gate()
+                    if cancel.is_set():
+                        raise PrefetchCancelledError()
+                offset = base + int(row_ids[position]) * stride
+                n = os.preadv(fd, [memoryview(raw[position])], offset)
+                if n != stride:
+                    raise OSError(
+                        f"short PLE row read: {n} of {stride} bytes at {offset}"
+                    )
+
+        n = len(row_ids)
+        if pool is None or slices <= 1 or n < 2 * slices:
+            part(0, n)
+        else:
+            bounds = np.linspace(0, n, slices + 1, dtype=np.int64).tolist()
+            futures = [
+                pool.submit(part, a, b)
+                for a, b in zip(bounds, bounds[1:], strict=False)
+            ]
+            for f in futures:
+                f.result()
+        return tuple(interleaved_columns(self._table, self._module._DTYPES, raw))
+
+    def _fill(
+        self, out, names, shards, starts, row_ids, lo, hi, cancel, gate=None
+    ) -> None:
         for position in range(lo, hi):
             row_id = int(row_ids[position])
-            if position % 256 == 0 and cancel.is_set():
-                raise PrefetchCancelledError()
+            if position % 16 == 0:
+                if gate is not None:
+                    gate()
+                if cancel.is_set():
+                    raise PrefetchCancelledError()
             shard_index = int(np.searchsorted(starts, row_id, side="right")) - 1
             start, end, arrays = shards[shard_index]
             if shard_index < 0 or not (start <= row_id < end):
@@ -207,6 +256,9 @@ class PLEPrefetch:
         )
         self._pending: deque[_Entry] = deque()
         self._current: _Entry | None = None
+        # row reads the MLX thread is blocked on; other spans' background reads wait for them
+        self._foreground = 0
+        self._idle = threading.Condition()
         self._blocked_s, self._asked, self._served = 0.0, 0, 0
         self.before = (0.0, 0)
         self._original = table._read_rows
@@ -241,7 +293,8 @@ class PLEPrefetch:
 
     def begin(self, n_ids: int, start: int, end: int) -> None:
         """The span ``start:end`` of an ``n_ids`` prompt is about to be built: its entry (if any)
-        serves the table's reads; entries of earlier spans or other prompts are dropped."""
+        serves the table's reads; earlier spans of that prompt are dropped (other prompts' entries
+        wait for their own turn and are evicted oldest-first by ``submit_span``)."""
         self._current = None
         # what was read since the previous span (decode steps of the last request) stays visible
         self.before = (self._blocked_s, self._asked)
@@ -250,7 +303,7 @@ class PLEPrefetch:
             if entry.key == (n_ids, start, end):
                 self._current = entry
                 self._pending.remove(entry)
-            elif entry.key[0] != n_ids or entry.key[1] < start:
+            elif entry.key[0] == n_ids and entry.key[1] < start:
                 self._pending.remove(entry)
                 self._drop(entry)
 
@@ -260,11 +313,26 @@ class PLEPrefetch:
         try:
             entry.future.set_result(
                 self._reader.read(
-                    entry.row_ids, entry.cancel, self._workers, self._threads
+                    entry.row_ids,
+                    entry.cancel,
+                    self._workers,
+                    self._threads,
+                    gate=lambda: self._yield(entry),
                 )
             )
         except BaseException as exc:  # noqa: BLE001 - delivered to the consumer
             entry.future.set_exception(exc)
+
+    def _yield(self, entry: _Entry) -> None:
+        """A background read waits while the MLX thread reads rows it needs now (a decode step's
+        rows, or a span with no prefetch); the span being built never waits on itself."""
+        with self._idle:
+            while (
+                self._foreground
+                and entry is not self._current
+                and not entry.cancel.is_set()
+            ):
+                self._idle.wait(0.05)
 
     @staticmethod
     def _drop(entry: _Entry) -> None:
@@ -280,9 +348,14 @@ class PLEPrefetch:
 
     def _read_rows(self, row_ids):
         t0 = time.perf_counter()
+        with self._idle:
+            self._foreground += 1
         try:
             return self._read_rows_inner(row_ids)
         finally:
+            with self._idle:
+                self._foreground -= 1
+                self._idle.notify_all()
             self._blocked_s += time.perf_counter() - t0
 
     def _read_rows_inner(self, row_ids):
@@ -349,9 +422,8 @@ def attach(lm) -> PLEPrefetch | None:
     table = mod.ngram_embedding
     if (
         not getattr(table, "_shards", None)
-        or getattr(table, "_interleaved", None) is not None
-        or table.cache_rows
-    ):
+        and getattr(table, "_interleaved", None) is None
+    ) or table.cache_rows:
         return None
     existing: PLEPrefetch | None = table.__dict__.get("_yunshu_prefetch")
     if existing is not None:

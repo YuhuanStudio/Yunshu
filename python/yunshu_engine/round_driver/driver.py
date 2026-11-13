@@ -49,7 +49,7 @@ from typing import Any, cast
 import mlx.core as mx
 import numpy as np
 
-from .. import fn_ttft, gpu_window, hit_stages, keyed_sampling, ple_prefetch, settings
+from .. import fn_ttft, gpu_window, hit_stages, keyed_sampling, settings
 from ..blocks.head import top_logprobs_device
 from ..cache_prefill import reserve_prompt_kv
 from ..constrained_spec import forced_tokens
@@ -655,6 +655,7 @@ class RoundDriver:
             else:
                 vocab.set_context(req.ids)
         self.rows.append(row)
+        self._ple_admit(row)
         return row.hit
 
     # ── APC prefix cache ─────────────────────────────────────────────────
@@ -1563,16 +1564,33 @@ class RoundDriver:
             return "grid+checkpoint" if on_grid else "checkpoint-cut"
         return "grid" if on_grid else "other"
 
+    def _ple_admit(self, row: _Row) -> None:
+        """Start reading the PLE rows of the row's first prefill span now, while it waits for its
+        step (behind other rows' prefill or decode, or the rest of admission). The reads yield to
+        any row read the MLX thread is waiting on (``ple_prefetch`` foreground priority)."""
+        ids = row.req.ids
+        if row.done >= len(ids):
+            return
+        try:
+            pf = self.layer.ple_prefetch(self.lm)
+            if pf is not None:
+                budget = (
+                    self.chunk if self.batch.rows else self.idle_budget
+                )  # as the step picks it
+                end = self.layer.span_end(row, row.done, budget, atom=self.atom)
+                pf.submit_span(ids, row.done, end)
+        except Exception:  # noqa: BLE001 - a speed feature: the step reads its rows itself
+            logger.warning("PLE prefetch at admission failed", exc_info=True)
+
     def _ple_lookahead(self, pf, items: list, budget: int) -> None:
         """Start reading the PLE rows of the spans this prompt prefills next (a wrong guess costs
         a synchronous read of the missed rows, never a different value)."""
         last = items[-1]
         row, ids = last.row, last.row.req.ids
         if last.seg is None or row.done >= len(ids):
-            pf.cancel()
             return
         start = row.done
-        for _ in range(ple_prefetch.MAX_PENDING):
+        for _ in range(2):  # spans read ahead of the step being built
             if start >= len(ids):
                 break
             end = self.layer.span_end(

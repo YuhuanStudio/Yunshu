@@ -86,3 +86,57 @@ def test_out_of_range_and_toggle(tmp_path):
     with pytest.raises(IndexError):
         table._read_rows(np.array([sum(SHARD_ROWS)]))
     assert ple_parallel.install(0) is False and ple_parallel.active_threads() == 0
+
+
+def _interleave(tmp_path, cache_rows):
+    """The ranges table of ``_build`` repacked one record per row (``interleaved_q4``)."""
+    manifest = _build(tmp_path, cache_rows)
+    ranges = ps.QuantizedMMapNGramEmbedding(manifest)
+    rows = ranges._read_rows(np.arange(sum(SHARD_ROWS), dtype=np.int64))
+    raw = np.concatenate([a.view(np.uint8).reshape(len(a), -1) for a in rows], axis=1)
+    (tmp_path / "ple-q4.rows").write_bytes(raw.tobytes())
+    meta = json.loads(manifest.read_text())
+    path = tmp_path / "ple-rows.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "source_root": ".",
+                "layout": "interleaved_q4",
+                "data_file": "ple-q4.rows",
+                "row_width": ROW_WIDTH,
+                "row_count": sum(SHARD_ROWS),
+                "row_stride": int(raw.shape[1]),
+                "quantization": meta["quantization"],
+                "cache_rows": cache_rows,
+            }
+        )
+    )
+    return manifest, path
+
+
+@pytest.mark.parametrize("cache_rows", [0, 4])
+def test_interleaved_rows_identical_to_upstream_and_to_the_ranges_table(
+    tmp_path, cache_rows
+):
+    ranges_manifest, manifest = _interleave(tmp_path, cache_rows)
+    ranges = ps.QuantizedMMapNGramEmbedding(ranges_manifest)
+    reference = ps.QuantizedMMapNGramEmbedding(manifest)
+    patched = ps.QuantizedMMapNGramEmbedding(manifest)
+    assert reference._interleaved is not None
+    for batch in ([3, 11, 20, 0, 6], [11, 3, 7], [20, 19, 1], [0], [5, 5, 2]):
+        ids = np.array(batch, dtype=np.int64)
+        ple_parallel.install(0)
+        expected = reference._read_rows(ids)
+        from_ranges = ranges._read_rows(ids)
+        ple_parallel.install(4)
+        got = patched._read_rows(ids)
+        for want, alt, have in zip(expected, from_ranges, got, strict=True):
+            assert want.dtype == have.dtype and want.shape == have.shape
+            assert np.array_equal(want, have) and np.array_equal(alt, have)
+    assert (reference._hits, reference._misses, reference._bytes) == (
+        patched._hits,
+        patched._misses,
+        patched._bytes,
+    )
+    assert list(reference._cache) == list(patched._cache)

@@ -103,3 +103,54 @@ def test_scale_tensors_are_recognised():
     )
     assert ple_ssd.is_ple_scale(scale) and not ple_ssd.is_ple_tensor(scale)
     assert not ple_ssd.is_ple_scale(PLE)
+
+
+def test_rows_mode_uses_the_repacked_table(pack, monkeypatch, tmp_path):
+    built = []
+
+    def fake_rows(model_path):
+        built.append(model_path)
+        return tmp_path / "ple-rows.json"
+
+    monkeypatch.setattr(ple_ssd, "rows_manifest_for", fake_rows)
+    monkeypatch.setattr(
+        ple_ssd, "manifest_for", lambda p: pytest.fail("ranges manifest not wanted")
+    )
+    monkeypatch.setenv("YUNSHU_PLE_STORAGE", "ssd-rows")
+    path, config = pack
+    assert ple_ssd.external_ple(config, path) is True
+    assert config["text_config"]["ple_storage"]["manifest"].endswith("ple-rows.json")
+    assert built == [path]
+    assert (
+        ple_ssd.bytes_read_from_files(path) == 5000
+    )  # still read from disk, not memory
+
+
+def test_rows_store_is_built_once_under_the_rows_dir(pack, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def materialize(model_path, manifest_path, *, data_file):
+        calls.append(data_file)
+        assert not (manifest_path.parent / data_file).exists()  # stale data removed
+        (manifest_path.parent / data_file).write_bytes(b"\0" * 300)
+        manifest_path.write_text("{}")
+
+    monkeypatch.setattr(
+        ple_ssd,
+        "qwen4_first_module",
+        lambda name: SimpleNamespace(materialize_interleaved_ple_store=materialize),
+    )
+    rows_dir = tmp_path / "rows"
+    monkeypatch.setenv("YUNSHU_PLE_ROWS_DIR", str(rows_dir))
+    path, _ = pack
+    key = ple_ssd._cache_key(path, path / "model.safetensors.index.json")
+    (rows_dir / key).mkdir(parents=True)
+    (rows_dir / key / "ple-q4.rows").write_bytes(b"torn")  # an interrupted build
+    first = ple_ssd.rows_manifest_for(path)
+    assert first == rows_dir / key / "ple-rows.json" and first.exists()
+    assert (rows_dir / key / "ple-q4.rows").stat().st_size == 300
+    assert ple_ssd.rows_manifest_for(path) == first
+    assert calls == ["ple-q4.rows"]  # the second call reuses the store
+    assert not list((rows_dir / key).glob("*.partial.json"))

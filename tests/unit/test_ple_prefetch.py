@@ -294,6 +294,88 @@ def test_blocked_time_and_row_counts_are_reported(tmp_path):
     pf.close()
 
 
+def test_another_prompts_entry_survives_begin(tmp_path):
+    _, table = _pair(tmp_path)
+    pf = pp.PLEPrefetch(table, _params())
+    queued = _tokens(13, 64).tolist()  # a row waiting behind the one being prefilled
+    other = _tokens(14, 96).tolist()
+    assert pf.submit_span(queued, 0, 64)
+    assert pf.submit_span(other, 0, 48)
+    pf.begin(len(other), 0, 48)
+    assert pf._current.key == (96, 0, 48)
+    assert [e.key for e in pf._pending] == [(64, 0, 64)]  # kept for its own turn
+    pf.begin(len(queued), 0, 64)
+    assert pf._current.key == (64, 0, 64)
+    pf.close()
+
+
+def test_driver_starts_the_first_span_read_at_admission():
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver import driver as drv
+
+    calls, ends = [], []
+    pf = SimpleNamespace(submit_span=lambda ids, a, b: calls.append((len(ids), a, b)))
+
+    def span_end(row, start, budget, *, atom):
+        ends.append(budget)
+        return min(start + budget, len(row.req.ids))
+
+    d = object.__new__(drv.RoundDriver)
+    d.lm, d.idle_budget, d.chunk, d.atom = object(), 2048, 512, None
+    d.batch = SimpleNamespace(rows=[])
+    d.layer = SimpleNamespace(ple_prefetch=lambda lm: pf, span_end=span_end)
+    row = SimpleNamespace(req=SimpleNamespace(ids=list(range(5000))), done=0)
+    d._ple_admit(row)
+    assert calls == [(5000, 0, 2048)]
+    d.batch.rows = [object()]  # rows decoding: the step prefills one chunk
+    d._ple_admit(row)
+    assert calls[-1] == (5000, 0, 512) and ends == [2048, 512]
+    row.done = 5000  # a full APC hit has nothing left to prefill
+    d._ple_admit(row)
+    assert len(calls) == 2
+
+    def boom(lm):
+        raise OSError("table gone")
+
+    d.layer = SimpleNamespace(ple_prefetch=boom, span_end=span_end)
+    row.done = 0
+    d._ple_admit(row)  # a speed feature never fails admission
+
+
+def test_background_reads_yield_to_the_mlx_thread(tmp_path):
+    reference, table = _pair(tmp_path)
+    pf = pp.PLEPrefetch(table, _params())
+    queued = _tokens(21, 96).tolist()  # another prompt's span, read in the background
+    with pf._idle:
+        pf._foreground = 1  # the MLX thread is inside a row read
+    assert pf.submit_span(queued, 0, 96)
+    entry = pf._pending[-1]
+    try:
+        with pytest.raises(TimeoutError):
+            entry.future.result(timeout=0.3)  # it waits while the MLX thread reads
+    finally:
+        with pf._idle:
+            pf._foreground = 0
+            pf._idle.notify_all()
+    rows = entry.future.result(timeout=10)
+    for got, want in zip(rows, reference._read_rows(entry.row_ids), strict=True):
+        assert np.array_equal(got, want)  # same bytes once it runs
+    # the span being built is never held back by the MLX thread waiting on it
+    built = _tokens(22, 64).tolist()
+    assert pf.submit_span(built, 0, 64)
+    pf.begin(len(built), 0, 64)
+    with pf._idle:
+        pf._foreground = 1
+    try:
+        pf._current.future.result(timeout=10)
+    finally:
+        with pf._idle:
+            pf._foreground = 0
+            pf._idle.notify_all()
+    pf.close()
+
+
 def test_stats_of_a_span_exclude_reads_made_before_it_began(tmp_path):
     _, table = _pair(tmp_path)
     pf = pp.PLEPrefetch(table, _params())
@@ -303,4 +385,48 @@ def test_stats_of_a_span_exclude_reads_made_before_it_began(tmp_path):
     assert pf.before[1] == 3 and pf.before[0] > 0  # still reported as "before"
     table._read_rows(np.asarray([4, 5]))
     assert pf.take_stats()[1] == 2
+    pf.close()
+
+
+def test_interleaved_table_prefetch_matches_the_ranges_table(tmp_path):
+    manifest = _build(tmp_path)
+    ranges = ps.QuantizedMMapNGramEmbedding(manifest)
+    rows = ranges._read_rows(np.arange(sum(SHARD_ROWS), dtype=np.int64))
+    raw = np.concatenate([a.view(np.uint8).reshape(len(a), -1) for a in rows], axis=1)
+    (tmp_path / "ple-q4.rows").write_bytes(raw.tobytes())
+    meta = json.loads(manifest.read_text())
+    rows_manifest = tmp_path / "ple-rows.json"
+    rows_manifest.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "source_root": ".",
+                "layout": "interleaved_q4",
+                "data_file": "ple-q4.rows",
+                "row_width": ROW_WIDTH,
+                "row_count": sum(SHARD_ROWS),
+                "row_stride": int(raw.shape[1]),
+                "quantization": meta["quantization"],
+                "cache_rows": 0,
+            }
+        )
+    )
+    table = ps.QuantizedMMapNGramEmbedding(rows_manifest)
+    reference = ps.QuantizedMMapNGramEmbedding(rows_manifest)
+    params = _params()
+    pf = pp.PLEPrefetch(table, params)
+    calls = []
+    original = pf._original
+    pf._original = lambda ids: (calls.append(len(ids)), original(ids))[1]
+    toks = _tokens(5, 64)
+    assert pf.submit_span(toks.tolist(), 0, len(toks))
+    pf.begin(len(toks), 0, len(toks))
+    want_ids = np.unique(pp.span_row_ids(np.concatenate([[0, 0], toks]), params))
+    mine = table._read_rows(want_ids)
+    for a, b, c in zip(
+        mine, reference._read_rows(want_ids), ranges._read_rows(want_ids), strict=True
+    ):
+        assert a.dtype == b.dtype and np.array_equal(a, b) and np.array_equal(a, c)
+    assert calls == []  # every row came from the buffer
+    assert table._misses == reference._misses and table._bytes == reference._bytes
     pf.close()
