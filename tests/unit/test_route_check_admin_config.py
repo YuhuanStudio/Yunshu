@@ -96,5 +96,7 @@ def test_exempt_list_is_only_the_documented_501():
         "GET /console",
         "GET /console/",
         "GET /console/{rest:path}",
+        # deletes the ~32 GB prepared PLE copy; GET/POST of the same route are served-checked
+        "DELETE /v1/yunshu/models/{model_id:path}/prepare",
     }
     assert all(reason.strip() for reason in rc.EXEMPT.values())
