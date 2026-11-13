@@ -224,7 +224,7 @@ Resource readouts (CPU, unified memory, Metal), health checks derived from real 
 
 ### Models
 
-Registered and loaded models with state, size and idle retention; load, unload, warm up and test in the playground; a fit check that says whether a model fits and what would be evicted; import a local or Hugging Face snapshot without copying weights; models found on disk but not registered; cancel an in-progress load.
+Registered and loaded models with state, size and idle retention; load, unload, warm up and test in the playground; a fit check that says whether a model fits and what would be evicted; import a local or Hugging Face snapshot without copying weights; models found on disk but not registered; cancel an in-progress load. On a Qwen3.8-Flash-Next model's page, "Prepare (faster cold start)" runs the one-time PLE repack in the background (prepared badge, storage in use, progress with ETA, cancel, remove); it is the same job as `yunshu prepare`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/console/en/models-dark.webp">

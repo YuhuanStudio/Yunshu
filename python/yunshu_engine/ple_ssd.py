@@ -62,19 +62,71 @@ def manifest_for(model_path: Path) -> Path:
     return target
 
 
+def rows_dir_for(model_path: Path) -> Path:
+    """The directory holding the repacked PLE table for ``model_path`` (one per checkpoint)."""
+    root = settings.get("YUNSHU_PLE_ROWS_DIR")
+    base = Path(root) if root else paths.home() / "cache" / "ple"
+    return base / _cache_key(model_path, model_path / "model.safetensors.index.json")
+
+
+def prepared_manifest(model_path: Path) -> Path | None:
+    """The manifest of a finished, matching repack of ``model_path``'s PLE table, else None.
+
+    Matching: the directory key fingerprints the checkpoint (path, index size and mtime), the
+    manifest must name this checkpoint as its source, and the data file must have exactly the
+    size the manifest implies (a torn or foreign file is never used)."""
+    model_path = Path(model_path)
+    try:
+        target = rows_dir_for(model_path) / "ple-rows.json"
+        manifest = json.loads(target.read_text())
+        if manifest.get("layout") != "interleaved_q4":
+            return None
+        source = (target.parent / manifest["source_root"]).resolve()
+        if source != model_path.resolve():
+            return None
+        data = target.parent / manifest["data_file"]
+        if data.stat().st_size != int(manifest["row_count"]) * int(
+            manifest["row_stride"]
+        ):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return target
+
+
+def effective_storage(model_path: Path) -> tuple[str, str]:
+    """``(storage, why)`` for a Flash-Next pack: ``YUNSHU_PLE_STORAGE`` when set, else
+    ``ssd-rows`` when a matching repack exists (``yunshu prepare``) and ``ssd`` otherwise."""
+    setting = settings.get("YUNSHU_PLE_STORAGE")
+    if setting != "auto":
+        return setting, "YUNSHU_PLE_STORAGE"
+    if prepared_manifest(Path(model_path)) is not None:
+        return "ssd-rows", "auto: prepared"
+    return "ssd", "auto: not prepared"
+
+
+def clear_partials(directory: Path) -> None:
+    """Remove what an interrupted repack leaves: temp data files and temp manifests."""
+    for stale in (
+        *directory.glob(".ple-q4.rows.*.partial"),
+        *directory.glob("*.partial.json"),
+    ):
+        stale.unlink(missing_ok=True)
+
+
 def rows_manifest_for(model_path: Path) -> Path:
     """Build (once) and return the manifest of the repacked one-record-per-row PLE table
     (``interleaved_q4``) for ``model_path``; its data file sits beside it."""
-    index_path = model_path / "model.safetensors.index.json"
-    root = settings.get("YUNSHU_PLE_ROWS_DIR")
-    base = Path(root) if root else paths.home() / "cache" / "ple"
-    target = base / _cache_key(model_path, index_path) / "ple-rows.json"
-    if target.exists():
-        return target
+    ready = prepared_manifest(model_path)
+    if ready is not None:
+        return ready
+    target = rows_dir_for(model_path) / "ple-rows.json"
     ple_storage = qwen4_first_module("ple_storage")
     if ple_storage is None:
         raise ImportError("no Qwen4 ple_storage module")
     target.parent.mkdir(parents=True, exist_ok=True)
+    clear_partials(target.parent)
+    target.unlink(missing_ok=True)  # a manifest that failed validation
     partial = target.with_name(f"ple-rows.{os.getpid()}.partial.json")
     data = target.parent / "ple-q4.rows"
     if data.exists():
@@ -102,8 +154,7 @@ def external_ple(config: dict, model_path) -> bool:
     text = config.get("text_config")
     if not isinstance(text, dict) or text.get("ple_storage"):
         return False
-    storage = settings.get("YUNSHU_PLE_STORAGE")
-    if storage not in ("ssd", "ssd-rows"):
+    if settings.get("YUNSHU_PLE_STORAGE") == "memory":
         return False
     model_path = Path(model_path)
     index_path = model_path / "model.safetensors.index.json"
@@ -112,6 +163,7 @@ def external_ple(config: dict, model_path) -> bool:
     weight_map = json.loads(index_path.read_text()).get("weight_map") or {}
     if not any(PLE_MARKER in key for key in weight_map):
         return False
+    storage, why = effective_storage(model_path)
     manifest = (
         rows_manifest_for(model_path)
         if storage == "ssd-rows"
@@ -124,10 +176,19 @@ def external_ple(config: dict, model_path) -> bool:
             k: v for k, v in quantization.items() if PLE_MARKER not in k
         }
     logger.info(
-        "Qwen4 PLE: n-gram table read from the checkpoint files (manifest %s); "
+        "Qwen4 PLE: n-gram table storage %s (%s), manifest %s; "
         "YUNSHU_PLE_STORAGE=memory loads it instead",
+        storage,
+        why,
         manifest,
     )
+    if why == "auto: not prepared":
+        logger.info(
+            "Qwen4 PLE: `yunshu prepare %s` repacks the table once (about %.0f GB of disk, "
+            "a few minutes) for 5-25%% faster cold first tokens; undo with --remove",
+            model_path.name,
+            ple_payload_bytes(model_path) / 1e9,
+        )
     return True
 
 
@@ -140,29 +201,46 @@ def is_ple_scale(key: str) -> bool:
     return key.endswith(".ple.ple_embedding.ngram_embedding.weight_scale")
 
 
-def bytes_read_from_files(model_path) -> int:
-    """Bytes of the PLE table ``external_ple`` will leave on disk for this pack (0 when it does not
-    apply), from the safetensors headers alone, so the load-time memory plan does not count them."""
+def has_ple_table(model_path) -> bool:
+    """True for a Qwen4-family pack whose n-gram table is an ordinary weight (not a prepared view)."""
     model_path = Path(model_path)
     try:
         config = json.loads((model_path / "config.json").read_text())
-        if (
-            not is_qwen4_family(config)
-            or (config.get("text_config") or {}).get("ple_storage")
-            or settings.get("YUNSHU_PLE_STORAGE") not in ("ssd", "ssd-rows")
+        if not is_qwen4_family(config) or (config.get("text_config") or {}).get(
+            "ple_storage"
         ):
-            return 0
+            return False
         weight_map = json.loads(
             (model_path / "model.safetensors.index.json").read_text()
         )["weight_map"]
     except (OSError, ValueError, KeyError):
+        return False
+    return any(PLE_MARKER in key for key in weight_map)
+
+
+def ple_payload_bytes(model_path) -> int:
+    """Bytes of the PLE table in the pack's safetensors files, from the headers alone."""
+    model_path = Path(model_path)
+    try:
+        weight_map = json.loads(
+            (model_path / "model.safetensors.index.json").read_text()
+        )["weight_map"]
+        total = 0
+        for file_name in sorted({f for k, f in weight_map.items() if PLE_MARKER in k}):
+            with (model_path / file_name).open("rb") as fh:
+                header = json.loads(fh.read(int.from_bytes(fh.read(8), "little")))
+            for key, entry in header.items():
+                if key != "__metadata__" and PLE_MARKER in key:
+                    start, end = entry["data_offsets"]
+                    total += end - start
+    except (OSError, ValueError, KeyError):
         return 0
-    total = 0
-    for file_name in sorted({f for k, f in weight_map.items() if PLE_MARKER in k}):
-        with (model_path / file_name).open("rb") as fh:
-            header = json.loads(fh.read(int.from_bytes(fh.read(8), "little")))
-        for key, entry in header.items():
-            if key != "__metadata__" and PLE_MARKER in key:
-                start, end = entry["data_offsets"]
-                total += end - start
     return total
+
+
+def bytes_read_from_files(model_path) -> int:
+    """Bytes of the PLE table ``external_ple`` will leave on disk for this pack (0 when it does not
+    apply), from the safetensors headers alone, so the load-time memory plan does not count them."""
+    if settings.get("YUNSHU_PLE_STORAGE") == "memory" or not has_ple_table(model_path):
+        return 0
+    return ple_payload_bytes(model_path)

@@ -2,6 +2,7 @@
 the load-time memory plan, on a fake pack (headers only; no MLX)."""
 
 import json
+import os
 import struct
 
 import pytest
@@ -135,7 +136,17 @@ def test_rows_store_is_built_once_under_the_rows_dir(pack, monkeypatch, tmp_path
         calls.append(data_file)
         assert not (manifest_path.parent / data_file).exists()  # stale data removed
         (manifest_path.parent / data_file).write_bytes(b"\0" * 300)
-        manifest_path.write_text("{}")
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "layout": "interleaved_q4",
+                    "data_file": data_file,
+                    "row_count": 3,
+                    "row_stride": 100,
+                    "source_root": os.path.relpath(model_path, manifest_path.parent),
+                }
+            )
+        )
 
     monkeypatch.setattr(
         ple_ssd,

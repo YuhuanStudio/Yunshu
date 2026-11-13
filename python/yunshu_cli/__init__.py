@@ -103,6 +103,7 @@ from .doctor import doctor
 from .eval import eval_app
 from .integrations import launch_app
 from .model import model_app, pull
+from .prepare import prepare
 from .serve import serve_app
 from .service import service_app
 from .setup import setup
@@ -121,6 +122,7 @@ app.command("console", rich_help_panel=_SERVER)(console_command)
 app.command("completion", rich_help_panel=_START)(completion)
 app.command("doctor", rich_help_panel=_START)(doctor)
 app.command("pull", rich_help_panel=_START)(pull)
+app.command("prepare", rich_help_panel=_SERVER)(prepare)
 app.add_typer(serve_app, name="serve", rich_help_panel=_START)
 app.add_typer(service_app, name="service", rich_help_panel=_START)
 app.add_typer(chat_app, name="chat", rich_help_panel=_START)

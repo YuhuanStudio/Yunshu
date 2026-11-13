@@ -406,6 +406,14 @@
       "summary": "opt-in W8A8 share of each dense FFN layer on the Apple Neural Engine beside the GPU during 27B prefill (Splash scheme); cold TTFT -5 to -10%",
       "doc": "docs/guides/ANE_FFN_SPLIT.md",
       "status": "experimental"
+    },
+    {
+      "id": "prepare-cold-start",
+      "group": "ops",
+      "title": "Prepare for faster cold starts",
+      "summary": "`yunshu prepare <model>` repacks Flash-Next's n-gram table once (about 32 GB, a few minutes, lossless); the server then uses it automatically: cold TTFT -22..-26% at 1K, -5..-9% at 8K. Also a console button on the model page",
+      "doc": "docs/guides/MODEL_SUPPORT.md",
+      "status": "stable"
     }
   ]
 }

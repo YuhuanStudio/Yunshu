@@ -41,6 +41,7 @@ patch release collects them.
 
 ### Added
 
+- `yunshu prepare <model>`: one-time repack of Flash-Next's PLE table for faster cold starts (cold TTFT -22..-26% at 1K, -5..-9% at 8K, lossless). It checks free disk first, shows progress and an ETA, skips a finished pack, rebuilds a partial one and `--remove` undoes it. `YUNSHU_PLE_STORAGE` now defaults to `auto`: the prepared copy is used when it matches the checkpoint, `ssd` otherwise (`ssd` forces the repack off); the load log names the storage and why and hints at `yunshu prepare` once. The console's model page has a "Prepare (faster cold start)" action with a prepared badge, progress, cancel and remove (`GET|POST|DELETE /v1/yunshu/models/{id}/prepare`).
 - `/v1/yunshu/status` and `/v1/yunshu/requests/recent` report `dropped`: finished-request rows pushed out of the full 512-row console ring (the oldest row goes first).
 - Opt-in draft-LM (`YUNSHU_DRAFT_MODEL`) and Gemma-4 assistant (`YUNSHU_GEMMA4_ASSISTANT`) drafters on the round driver's generic layer.
 - Dev releases: every push between patch releases is published as `X.Y.Z.devN` (PyPI pre-release, `pip install --pre`) and a GitHub pre-release. Each dev release's notes list only what changed since the previous dev release; the patch release collects them all.

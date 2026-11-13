@@ -289,3 +289,69 @@ export const getFit = (c: Connection, id: string, signal?: AbortSignal) =>
       throw e;
     }
   });
+
+// ── prepare (faster cold start) ────────────────────────────────────────
+
+export type PrepareJob = {
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  bytesDone: number;
+  bytesTotal: number;
+  etaS: number | null;
+  error: string | null;
+};
+
+export type PrepareStatus = {
+  applicable: boolean;
+  prepared: boolean;
+  storage: string | null;
+  tableBytes: number | null;
+  neededBytes: number | null;
+  freeBytes: number | null;
+  preparedBytes: number | null;
+  job: PrepareJob | null;
+};
+
+export function parsePrepare(raw: unknown): PrepareStatus {
+  const r = rec(raw);
+  const j = r.job ? rec(r.job) : null;
+  const state = str(j?.state) ?? "";
+  return {
+    applicable: r.applicable === true,
+    prepared: r.prepared === true,
+    storage: str(r.storage),
+    tableBytes: num(r.table_bytes),
+    neededBytes: num(r.needed_bytes),
+    freeBytes: num(r.free_bytes),
+    preparedBytes: num(r.prepared_bytes),
+    job: j
+      ? {
+          state: (STATES.includes(state)
+            ? state
+            : "failed") as PrepareJob["state"],
+          bytesDone: num(j.bytes_done) ?? 0,
+          bytesTotal: num(j.bytes_total) ?? 0,
+          etaS: num(j.eta_s),
+          error: str(j.error),
+        }
+      : null,
+  };
+}
+
+const prepareUrl = (id: string) =>
+  `/yunshu/models/${encodeURIComponent(id)}/prepare`;
+
+export const getPrepare = (c: Connection, id: string, signal?: AbortSignal) =>
+  orUnsupported(async () =>
+    parsePrepare(await requestJson<unknown>(c, prepareUrl(id), { signal })),
+  );
+
+export const startPrepare = (c: Connection, id: string) =>
+  requestJson<unknown>(c, prepareUrl(id), { method: "POST" }).then(
+    parsePrepare,
+  );
+
+/** Cancels a running repack; with none running it removes the prepared copy. */
+export const cancelOrRemovePrepare = (c: Connection, id: string) =>
+  requestJson<unknown>(c, prepareUrl(id), { method: "DELETE" }).then(
+    parsePrepare,
+  );

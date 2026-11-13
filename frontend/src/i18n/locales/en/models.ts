@@ -217,5 +217,22 @@ const models: Shape<typeof zh> = {
     "The engine did not report system-available memory, so this is total minus what Metal has allocated. It ignores other apps and reads high.",
   "detail.waitingCalm":
     "The engine is busy or restarting; its models appear here as soon as it answers.",
+  "prepare.title": "Faster cold start",
+  "prepare.description":
+    "Repack Flash-Next's n-gram table (PLE) once so the first response after a cold start is quicker. Output is identical.",
+  "prepare.prepared": "Prepared",
+  "prepare.notPrepared": "Not prepared",
+  "prepare.storage": "Storage in use: {storage}",
+  "prepare.start": "Prepare (faster cold start)",
+  "prepare.cancel": "Cancel",
+  "prepare.remove": "Remove",
+  "prepare.unloadFirst": "Unload the model before removing.",
+  "prepare.progressAria": "Prepare progress",
+  "prepare.eta": "about {time} left",
+  "prepare.cost":
+    "Needs about {size} GB of disk and a few minutes; cold first tokens are 5-25% faster. Removable any time.",
+  "prepare.noDisk":
+    "Not enough disk space: {needed} GiB needed, {free} GiB free.",
+  "prepare.failed": "Prepare failed: {error}",
 };
 export default models;

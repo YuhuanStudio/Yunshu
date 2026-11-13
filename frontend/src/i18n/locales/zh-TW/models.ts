@@ -196,5 +196,21 @@ const models = {
   "list.freeTipMetal":
     "還沒取得系統可用記憶體（引擎沒有回報），這裡是總量減去 Metal 已配置的量，沒計入其他程式，會偏高。",
   "detail.waitingCalm": "引擎忙碌或重新啟動中，回應後會立即列出模型。",
+  "prepare.title": "加速冷啟動",
+  "prepare.description":
+    "一次性重新排列 Flash-Next 的 n-gram 表（PLE），冷啟動首個回應更快，輸出完全相同。",
+  "prepare.prepared": "已準備",
+  "prepare.notPrepared": "尚未準備",
+  "prepare.storage": "目前儲存方式：{storage}",
+  "prepare.start": "準備（加快冷啟動）",
+  "prepare.cancel": "取消",
+  "prepare.remove": "移除",
+  "prepare.unloadFirst": "請先卸載模型再移除。",
+  "prepare.progressAria": "準備進度",
+  "prepare.eta": "約剩 {time}",
+  "prepare.cost":
+    "需要約 {size} GB 磁碟空間與數分鐘；冷啟動首字約快 5–25%。隨時可移除。",
+  "prepare.noDisk": "磁碟空間不足：需要 {needed} GiB，目前可用 {free} GiB。",
+  "prepare.failed": "準備失敗：{error}",
 };
 export default models;

@@ -110,6 +110,7 @@ Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制�
 
 | 能力 | 內容 |
 |---|---|
+| [加速冷啟動準備](docs/guides/MODEL_SUPPORT.md) | `yunshu prepare <model>` 一次性重新排列 Flash-Next 的 n-gram 表（約 32 GB、數分鐘、無損；先檢查磁碟空間、可續跑，`--remove` 可還原）；之後伺服器自動使用，冷啟動 TTFT 1K 快 22–26%、8K 快 5–9%。console 的模型頁也能執行同一任務 |
 | [網頁 console](docs/CONSOLE.md) | 即時請求階段、歷史、日誌、模型、下載、快取、測試、金鑰、設定、狀態島 |
 | [Console 程序](docs/CONSOLE.md) | console 與引擎分開執行（連接埠 8100）：引擎離線時仍可用、歷史與請求紀錄、離線缺口 |
 | [Console 自動跟隨引擎](docs/CONSOLE.md) | `yunshu console --engine auto` 在本機連接埠找出 Yunshu 引擎並跟隨最新啟動者；可在狀態島固定一個；歷史把每次引擎啟動分成獨立工作階段 |

@@ -5,10 +5,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .. import log_ring
-from . import admin_cache, admin_logs, admin_models
+from . import admin_cache, admin_logs, admin_models, admin_prepare
 
 
 def register(app: FastAPI) -> None:
     log_ring.install()
-    for mod in (admin_models, admin_cache, admin_logs):
+    for mod in (admin_models, admin_prepare, admin_cache, admin_logs):
         app.include_router(mod.router, prefix="/v1")

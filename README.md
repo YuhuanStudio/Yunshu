@@ -117,6 +117,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 
 | Capability | What it does |
 |---|---|
+| [Prepare for faster cold starts](docs/guides/MODEL_SUPPORT.md) | `yunshu prepare <model>` repacks Flash-Next's n-gram table once (about 32 GB, a few minutes, lossless; free disk checked first, resumable, `--remove` undoes it); the server then uses it automatically, cold TTFT -22..-26% at 1K and -5..-9% at 8K. The same job runs from the model page in the console |
 | [Web console](docs/CONSOLE.md) | live request phases, history, logs, models, downloads, cache, playground, keys, settings, status island |
 | [Console process](docs/CONSOLE.md) | the console runs apart from the engine (port 8100): usable while the engine is down, recorded history and request log, outage gaps |
 | [Console follows engines](docs/CONSOLE.md) | `yunshu console --engine auto` finds Yunshu engines on local ports and follows the newest; pin one from the status island; history keeps each engine start as its own session |

@@ -198,5 +198,21 @@ const models: Shape<typeof zh> = {
   "list.freeTipMetal":
     "还没取得系统可用内存（引擎没有回报），这里是总量减去 Metal 已分配的量，没计入其他程序，会偏高。",
   "detail.waitingCalm": "引擎忙碌或重新启动中，响应后会立即列出模型。",
+  "prepare.title": "加速冷启动",
+  "prepare.description":
+    "一次性重新排列 Flash-Next 的 n-gram 表（PLE），冷启动首个回应更快，输出完全相同。",
+  "prepare.prepared": "已准备",
+  "prepare.notPrepared": "尚未准备",
+  "prepare.storage": "当前存储方式：{storage}",
+  "prepare.start": "准备（加快冷启动）",
+  "prepare.cancel": "取消",
+  "prepare.remove": "移除",
+  "prepare.unloadFirst": "请先卸载模型再移除。",
+  "prepare.progressAria": "准备进度",
+  "prepare.eta": "约剩 {time}",
+  "prepare.cost":
+    "需要约 {size} GB 磁盘空间与数分钟；冷启动首字约快 5–25%。随时可移除。",
+  "prepare.noDisk": "磁盘空间不足：需要 {needed} GiB，当前可用 {free} GiB。",
+  "prepare.failed": "准备失败：{error}",
 };
 export default models;

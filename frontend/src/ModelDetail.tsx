@@ -26,6 +26,7 @@ import { MemoryLedgerView } from "./MemoryLedger";
 import type { LedgerState } from "./memory-api";
 import { ModelActions, type Perform } from "./ModelActions";
 import { FitPanel, useFit } from "./FitPanel";
+import { PreparePanel } from "./PreparePanel";
 import { LoadingElapsed } from "./loading-clock";
 import { localFacts } from "./LocalInventory";
 import type { LocalModel } from "./admin-models-api";
@@ -313,6 +314,12 @@ export function ModelDetail({
               )}
             </SectionCard>
           )}
+          <PreparePanel
+            connection={connection}
+            modelId={model.id}
+            online={online}
+            loaded={model.loaded}
+          />
           <SectionCard
             icon={MemoryStick}
             title={t("models.detail.holders.title")}
