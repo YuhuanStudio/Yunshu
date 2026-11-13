@@ -279,3 +279,57 @@ def test_mtp_block_size_doc_matches_flashnext_default():
     assert (
         "2 for Flash-Next (qwen4) MTP" in REGISTRY["YUNSHU_MTP_BLOCK_SIZE"].description
     )
+
+
+# ── hot-path file cache ───────────────────────────────────────────────
+
+
+def test_config_file_is_not_restatted_on_every_get(tmp_path, monkeypatch):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("default_max_tokens = 100\n")
+    monkeypatch.setenv("YUNSHU_CONFIG", str(cfg))
+    calls = []
+    real = settings._config_path
+    monkeypatch.setattr(settings, "_config_path", lambda: calls.append(1) or real())
+    monkeypatch.setattr(settings, "_now", lambda: 1000.0, raising=False)
+    monkeypatch.setattr(settings, "_file_checked", None, raising=False)
+    for _ in range(200):
+        assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 100
+    assert len(calls) == 1
+
+
+def test_config_write_is_seen_at_once(tmp_path, monkeypatch):
+    cfg = tmp_path / "c.toml"
+    monkeypatch.setenv("YUNSHU_CONFIG", str(cfg))
+    monkeypatch.setattr(settings, "_now", lambda: 1000.0, raising=False)
+    settings.write_config_value("YUNSHU_DEFAULT_MAX_TOKENS", 111, cfg)
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 111
+    settings.write_config_value("YUNSHU_DEFAULT_MAX_TOKENS", 222, cfg)
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 222
+
+
+def test_external_config_edit_is_seen_after_the_recheck_window(tmp_path, monkeypatch):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("default_max_tokens = 100\n")
+    monkeypatch.setenv("YUNSHU_CONFIG", str(cfg))
+    clock = [1000.0]
+    monkeypatch.setattr(settings, "_now", lambda: clock[0], raising=False)
+    monkeypatch.setattr(settings, "_file_checked", None, raising=False)
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 100
+    cfg.write_text("default_max_tokens = 300\n")  # another process writes the file
+    clock[0] += getattr(settings, "_FILE_RECHECK_S", 0.5) / 2
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 100  # still inside the window
+    clock[0] += getattr(settings, "_FILE_RECHECK_S", 0.5)
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 300
+
+
+def test_config_source_change_rechecks_at_once(tmp_path, monkeypatch):
+    a = tmp_path / "a.toml"
+    b = tmp_path / "b.toml"
+    a.write_text("default_max_tokens = 1\n")
+    b.write_text("default_max_tokens = 2\n")
+    monkeypatch.setattr(settings, "_now", lambda: 1000.0, raising=False)
+    monkeypatch.setenv("YUNSHU_CONFIG", str(a))
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 1
+    monkeypatch.setenv("YUNSHU_CONFIG", str(b))
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 2

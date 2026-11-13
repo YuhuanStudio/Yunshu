@@ -49,9 +49,10 @@ from typing import Any, cast
 import mlx.core as mx
 import numpy as np
 
-from .. import fn_ttft, hit_stages, keyed_sampling, ple_prefetch
+from .. import fn_ttft, gpu_window, hit_stages, keyed_sampling, ple_prefetch, settings
 from ..blocks.head import top_logprobs_device
 from ..cache_prefill import reserve_prompt_kv
+from ..constrained_spec import forced_tokens
 from ..constraint_eos import GrammarDeadEndError
 from ..kernels import preempt
 from ..keyed_sampling import top_k_filter, top_p_filter
@@ -66,6 +67,7 @@ from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment
 from .layer import FlashNextLayer, PackedLayer, language_model
+from .stage_profile import RoundProfile
 
 logger = logging.getLogger(__name__)
 
@@ -1188,7 +1190,8 @@ class RoundDriver:
         # dtype, so its argmax runs over rounded log-probabilities: two adjacent bf16
         # logits can land on one value and the tie goes to the lower id. Take the same
         # argmax so a verified row picks the token serial decode would (omlx 26375259).
-        greedy = mx.argmax(lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1)
+        # the argmax of ``lg`` is computed on first use: None while ``lg`` changes below
+        greedy: mx.array | None = None
         draws: list[tuple[_Item, Any, Any]] = []
         for it, off, n in outs:
             row = it.row
@@ -1219,9 +1222,7 @@ class RoundDriver:
                     # This row's slice only; other packed distributions stay intact.
                     masked = apply_bitmask(lg[off : off + n], mask)
                     lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
-                    greedy = mx.argmax(
-                        lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
-                    )
+                    greedy = None
             if row.generic:
                 # the request's processors on every window row, in list order, after the guide's
                 # mask (a mask is -inf: the order only matters to top-n-sigma, and the plain row
@@ -1235,9 +1236,7 @@ class RoundDriver:
                     None,
                 )
                 lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
-                greedy = mx.argmax(
-                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
-                )
+                greedy = None
             if req.processors and not row.generic and static_mask_only(req.processors):
                 # static bans: every window row gets the mask a plain row applies (``pure_at``), so a
                 # drafting row verifies against the same distributions
@@ -1245,9 +1244,7 @@ class RoundDriver:
                 for p in req.processors:
                     masked = p.pure_at(row.generated, masked)
                 lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
-                greedy = mx.argmax(
-                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
-                )
+                greedy = None
             if row.penalty is not None and not row.generic and it.kind == "d":
                 # a drafting row's penalty: every window row over the tokens fed up to it (a prompt's
                 # last position has nothing generated yet, as the serial first call)
@@ -1258,9 +1255,7 @@ class RoundDriver:
                 )
                 masked = window_penalty(row.penalty, lg[off : off + n], window)
                 lg = mx.concatenate([lg[:off], masked, lg[off + n :]], axis=0)
-                greedy = mx.argmax(
-                    lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
-                )
+                greedy = None
             if row.force:
                 # the thinking budget's token at this position, not a sample
                 draws.append((it, mx.array(row.force[:1], dtype=mx.int32), None))
@@ -1276,6 +1271,10 @@ class RoundDriver:
                 )
                 and not req.logprobs
             ):
+                if greedy is None:
+                    greedy = mx.argmax(
+                        lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1
+                    )
                 draws.append((it, greedy[off : off + n], None))
                 continue
             if row.keyed is not None:
@@ -2005,9 +2004,6 @@ class RoundDriver:
             return self._decode_step_lone()
         if any(r.ahead is not None for r in self.rows):
             return self._settle_ahead()
-        from .. import gpu_window
-        from .stage_profile import RoundProfile
-
         prof = getattr(self, "_mtp_profile", None)
         if prof is None:
             self._mtp_profile = prof = RoundProfile()
@@ -2184,9 +2180,6 @@ class RoundDriver:
         tokens, so a boundary can only be the final draw. Thinking-budget rows stay
         serial. Generic window rounding remains opt-in with the existing False default.
         """
-        from .. import settings
-        from ..constrained_spec import forced_tokens
-
         req = row.req
         if (
             not settings.get("YUNSHU_JUMP_FORWARD")

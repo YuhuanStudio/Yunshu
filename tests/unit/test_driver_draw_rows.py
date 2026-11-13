@@ -155,3 +155,23 @@ def test_window_draw_equals_plain_steps(name, use_guide, logprobs, dtype):
         assert got == want_lp
     else:
         assert extra is None
+
+
+@pytest.mark.parametrize("name", sorted(SETS))
+def test_window_draw_computes_greedy_once(monkeypatch, name):
+    """A greedy window row takes one argmax after its last logits change (was one per change)."""
+    real = mx.argmax
+    calls = []
+    monkeypatch.setattr(mx, "argmax", lambda *a, **k: calls.append(1) or real(*a, **k))
+    drafts = [next(t for t in range(40, 80) if t % 3 == (3 + j) % 3) for j in range(4)]
+    gen = [30, 31, 32]
+    logits = mx.random.normal((len(drafts) + 1, V)) * 3
+    guide = Automaton()
+    for t in gen:
+        guide.feed(t)
+    row = _row(SETS[name], guide, False, gen, generic=True)
+    window = mx.array([gen[-1], *drafts], dtype=mx.int32)
+    item = _Item("d", row, None, 0, 0, 0, len(drafts) + 1, tokens=window)
+    calls.clear()
+    _driver()._draw([item], None, target_logits=logits)
+    assert len(calls) == 1

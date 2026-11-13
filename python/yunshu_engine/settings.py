@@ -39,6 +39,7 @@ import math
 import os
 import re
 import tempfile
+import time
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -626,6 +627,13 @@ _classify()
 _overrides: dict[str, str] = {}
 _file_values: dict[str, str] | None = None
 _file_path_loaded: tuple[str | None, int | None] | None = None
+# The config file is re-stat'ed at most every _FILE_RECHECK_S (hot paths call get() per row per
+# step); in-process writers invalidate at once, and changed YUNSHU_CONFIG inputs recheck at once.
+_FILE_RECHECK_S = 0.5
+_file_checked: tuple[float, tuple] | None = (
+    None  # (time of the last stat, explicit config inputs)
+)
+_now = time.monotonic  # tests patch this to age the cache
 
 
 def _setting(name: str) -> Setting:
@@ -649,10 +657,17 @@ def set_override(name: str, value: Any) -> None:
     """Highest-precedence value (CLI flags, ``--set``)."""
     _setting(name)
     _overrides[name] = _to_text(value)
+    _invalidate_file_cache()
 
 
 def clear_overrides() -> None:
     _overrides.clear()
+    _invalidate_file_cache()
+
+
+def _invalidate_file_cache() -> None:
+    global _file_checked
+    _file_checked = None
 
 
 def user_config_path() -> Path:
@@ -698,7 +713,17 @@ def load_config_file(path: str | os.PathLike | None) -> dict[str, str]:
 
 
 def _file() -> dict[str, str]:
-    global _file_values, _file_path_loaded
+    global _file_values, _file_path_loaded, _file_checked
+    inputs = (_overrides.get("YUNSHU_CONFIG"), os.environ.get("YUNSHU_CONFIG"))
+    now = _now()
+    if (
+        _file_values is not None
+        and _file_checked is not None
+        and _file_checked[1] == inputs
+        and now - _file_checked[0] < _FILE_RECHECK_S
+    ):
+        return _file_values
+    _file_checked = (now, inputs)
     path = _config_path()
     try:
         key = (path, Path(path).expanduser().stat().st_mtime_ns) if path else None
@@ -749,6 +774,7 @@ def write_config_values(
         os.replace(tmp, target)
     finally:
         Path(tmp).unlink(missing_ok=True)
+    _invalidate_file_cache()
     return target
 
 

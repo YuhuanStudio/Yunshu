@@ -26,12 +26,14 @@ state / conv window continue from the position ``used`` (``commit``).
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 import mlx.core as mx
 import numpy as np
 
+from .. import tree_verify as tv
 from ..blocks.kv import _scatter_rows
 from ..kernels import ragged_attention as ra
 from .decode_set import DecodeSet
@@ -43,6 +45,12 @@ DECODE_GROWTH = 2048  # most keys a slot buffer grows by at once (tree_verify.DE
 
 # Non-bf16 attention calls (MTP heads kept in fp16 / fp32): counted so the path's reach is measurable.
 FALLBACK_HITS = [0]
+
+
+@functools.cache
+def _chain_shape(width: int) -> tv.TreeShape:
+    """The chain window of ``width`` rows, shared: its index tables are built once, not per layer."""
+    return tv.TreeShape(list(range(-1, width - 1)))
 
 
 def _round_cap(n: int) -> int:
@@ -503,8 +511,6 @@ class DecodeBatch(DecodeSet):
     def _gdn(self, verifier, g, xn, i, lens, recs) -> mx.array:
         """One GDN layer over the rows' windows, row by row through ``tree_verify._gdn_layer`` (a chain
         window); the state advance is the commit's replay, as in the DFlash batch."""
-        from .. import tree_verify as tv
-
         projected = verifier._linears(
             (g.in_proj_qkv, g.in_proj_z, g.in_proj_b, g.in_proj_a), xn
         )
@@ -515,7 +521,7 @@ class DecodeBatch(DecodeSet):
                 g,
                 xn[:, at : at + w],
                 (self.conv[i][b], self.state[i][b]),
-                tv.TreeShape(list(range(-1, w - 1))),
+                _chain_shape(w),
                 projected=tuple(p[:, at : at + w] for p in projected),
                 project_output=False,
             )
@@ -531,8 +537,6 @@ class DecodeBatch(DecodeSet):
         len(window)``): KV lengths advance, and every row's GDN state / conv window advance by the
         accepted chain through the tree commit's replay kernels (the state was not touched by the
         forward, as in the DFlash batch)."""
-        from .. import tree_verify as tv
-
         last, self._last = self._last, None
         assert last is not None
         for r, u in zip(self.rows, used, strict=True):
@@ -542,7 +546,7 @@ class DecodeBatch(DecodeSet):
                 continue
             cells = {i: _Cell(self.conv[i][b], self.state[i][b]) for i in rec}
             res = tv.TreeResult(
-                shape=tv.TreeShape(list(range(-1, last["lens"][b] - 1))),
+                shape=_chain_shape(last["lens"][b]),
                 n0=0,
                 hidden=None,
             )
