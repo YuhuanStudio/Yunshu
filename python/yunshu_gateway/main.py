@@ -1137,7 +1137,8 @@ def create_app() -> FastAPI:
     elif not settings.get("YUNSHU_AUTH_TOKEN"):
         logger.warning(
             "SECURITY: No YUNSHU_AUTH_TOKEN set — admin endpoints ("
-            "model load/unload, benchmarks, dashboard) are DENIED by default. "
+            "model load/unload, settings, keys) are open to callers on this machine only (the "
+            "console) and DENIED to every other address. "
             "Inference endpoints (chat/completions) remain accessible without auth. "
             "Set YUNSHU_AUTH_TOKEN=<secret> to enable full Bearer token auth."
         )

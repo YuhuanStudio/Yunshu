@@ -13,10 +13,16 @@ from pydantic import BaseModel, model_validator
 
 from yunshu_control.audit_log import log_operation, resolve_actor
 from yunshu_engine import settings
+from yunshu_gateway.local_operator import local_console_route, local_operator
 
 from ..engine import get_engine, get_model_manager
 
 router = APIRouter(tags=["models"])
+
+
+def is_owner(request: Request) -> bool:
+    """The caller is the owner (static token, or no auth / auth disabled), not a managed key."""
+    return getattr(getattr(request, "state", None), "role", None) == "owner"
 
 
 def _check_permission(request: Request, permission: str) -> None:
@@ -27,7 +33,8 @@ def _check_permission(request: Request, permission: str) -> None:
     1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in, logged at startup)
     2. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
        (applies to EVERY permission — setting a token locks the whole server)
-    3. If no auth configured and not disabled:
+    3. If no auth configured and not disabled (``local_operator``: a loopback caller, the console on
+       this machine, may also use the admin / load routes; a remote one may not):
        - ``can_infer`` (inference endpoints) → ALLOW. A local drop-in OpenAI
          server must serve inference out of the box, like Ollama/LM Studio;
          the startup banner promises exactly this. Bind to localhost (default)
@@ -53,6 +60,13 @@ def _check_permission(request: Request, permission: str) -> None:
                 else request.headers.get("x-api-key")
             )
             principal = api_keys.principal_for(presented, auth_token)
+        if (
+            principal is None
+            and not request.headers.get("Authorization")
+            and not request.headers.get("x-api-key")
+            and local_console_route(request, auth_token or "")
+        ):
+            return  # the console on this machine (stored keys only, no static token)
         if principal is None:
             raise HTTPException(
                 status_code=401,
@@ -71,7 +85,7 @@ def _check_permission(request: Request, permission: str) -> None:
     # No auth configured and not explicitly disabled. Inference stays open
     # (matches the startup banner + the drop-in-local-server contract);
     # privileged ops fall through to deny-by-default.
-    if permission == "can_infer":
+    if permission == "can_infer" or local_operator(request):
         return
     logger.warning(
         "Privileged endpoint (%s) access denied: no auth configured. "
@@ -80,7 +94,8 @@ def _check_permission(request: Request, permission: str) -> None:
     )
     raise HTTPException(
         status_code=401,
-        detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+        detail="No authentication configured, and this request does not come from this machine. "
+        "Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
     )
 
 

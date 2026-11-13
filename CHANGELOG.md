@@ -59,6 +59,12 @@ patch release collects them.
 
 ### Fixed
 
+- Console: nothing could be changed on a default install. With no `YUNSHU_AUTH_TOKEN`, every admin write (settings, CORS,
+  keys, model load) answered 401, and creating the first API key locked the console out of its own routes. Callers on
+  this machine (loopback peer, loopback `Host` / `Origin` / forwarded-for) now reach the console routes; remote callers
+  still need a token or an admin key, a static token still gates everything, and inference stays key-gated.
+- Console: the settings list marked 31 settings (models dir, MCP servers, every path) read-only for the owner even
+  though the owner may write them; read-only now reflects the caller. `YUNSHU_ADMIN_WRITE_EXEC_SETTINGS` is writable by the owner.
 - Flash-Next prefill (round driver): the MoE `shared_expert_gate` (N=1, 8-bit) gave a row different bits for a 3-16 token segment than for a long one, so a prefill tail after an APC hit differed from a cold prefill. The gate is now a row-invariant f32 dot over the bf16 dequantized weight. The numbers change (cross-version drift); identity is checked by `yv ab`.
 - Ragged tile attention (bf16 and int8 KV): a non-finite value stored past a row's length no longer reaches the output through a zero probability (0 * NaN); the row's last 64-key step reads V with zeros past its last key. Outputs on finite caches are unchanged bit for bit.
 - Metal live-buffer limit (`Resource limit (499000) exceeded`): answered as 507 `gpu_resource_limit` with restart guidance instead of an opaque 500.

@@ -3,7 +3,9 @@
 import importlib.util
 from pathlib import Path
 
-_PATH = Path(__file__).resolve().parents[2] / "scripts" / "research" / "followup_pilot.py"
+_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "research" / "followup_pilot.py"
+)
 _spec = importlib.util.spec_from_file_location("followup_pilot", _PATH)
 pilot = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pilot)
@@ -18,12 +20,16 @@ LINE = (
 def test_build_followup_resends_reply_verbatim():
     msgs = pilot.build_followup("PROMPT", "REPLY\n")
     assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
-    assert msgs[1]["content"] == "REPLY\n"  # the trailing newline is sent back as produced
+    assert (
+        msgs[1]["content"] == "REPLY\n"
+    )  # the trailing newline is sent back as produced
     assert msgs[2]["content"] == pilot.FOLLOW_TAIL
 
 
 def test_parse_turn_stages_reads_every_field():
-    rows = pilot.parse_turn_stages(LINE + "\nnoise\n" + LINE.replace("ids=33567", "ids=5"))
+    rows = pilot.parse_turn_stages(
+        LINE + "\nnoise\n" + LINE.replace("ids=33567", "ids=5")
+    )
     assert len(rows) == 2
     assert rows[0]["ids"] == 33567 and rows[0]["hit"] == 32768
     assert rows[0]["lookup"] == 19.3 and rows[0]["wait_first"] == 2846.8
@@ -35,6 +41,9 @@ def test_parse_turn_stages_empty_when_absent():
 
 
 def test_cached_tokens_reads_openai_usage_shape():
-    assert pilot.cached_tokens({"prompt_tokens_details": {"cached_tokens": 32768}}) == 32768
+    assert (
+        pilot.cached_tokens({"prompt_tokens_details": {"cached_tokens": 32768}})
+        == 32768
+    )
     assert pilot.cached_tokens({}) == 0
     assert pilot.cached_tokens(None) == 0

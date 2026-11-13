@@ -33,6 +33,7 @@ from starlette.responses import JSONResponse, Response
 from yunshu_engine import settings
 from yunshu_gateway import api_keys
 from yunshu_gateway.error_envelope import format_error_response
+from yunshu_gateway.local_operator import local_console_route
 from yunshu_gateway.token_compare import tokens_equal
 
 logger = logging.getLogger(__name__)
@@ -356,6 +357,9 @@ class AuthMiddleware:
             token = auth[7:]
         elif api_key:
             token = api_key
+        elif local_console_route(request, auth_token):
+            _stamp_identity(request)
+            return None, None
         else:
             return _auth_failed(
                 request, "Missing or invalid Authorization header", count=False

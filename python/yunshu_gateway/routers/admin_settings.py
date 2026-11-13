@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from yunshu_control.audit_log import log_operation, resolve_actor
 from yunshu_engine import paths, settings
 
-from .models import _check_permission
+from .models import _check_permission, is_owner
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["yunshu-admin"])
@@ -38,8 +38,21 @@ _HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?")
 # Not writable through the API: the pointer to the config file itself.
 _READ_ONLY = {
     "YUNSHU_CONFIG": "choose the config file with `yunshu serve --config`",
-    "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS": "only the operator on the host may enable this",
 }
+# Writable by the owner (static token / this machine), not by a managed admin-scope key.
+_OWNER_ONLY = {
+    "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS": "only the owner may change this, not a managed key",
+}
+
+
+def read_only_names(request: Request) -> set[str]:
+    """Settings PATCH refuses for this caller: what the console must show as read-only."""
+    out = set(_READ_ONLY)
+    if not is_owner(request):
+        out |= set(_OWNER_ONLY)
+        if not settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS"):
+            out |= {n for n, s in settings.REGISTRY.items() if s.host_access}
+    return out
 
 
 def _err(status: int, code: str, message: str, **extra: Any) -> HTTPException:
@@ -230,8 +243,9 @@ async def patch_config(body: ConfigPatch, request: Request) -> dict:
                 f" (did you mean {', '.join(hint)}?)" if hint else ""
             )
             continue
-        if name in _READ_ONLY:
-            errors[name] = f"read-only here: {_READ_ONLY[name]}"
+        if name in _READ_ONLY or (name in _OWNER_ONLY and not is_owner(request)):
+            why = _READ_ONLY.get(name) or _OWNER_ONLY[name]
+            errors[name] = f"read-only here: {why}"
             continue
         try:
             clean[name] = _validate_one(name, value)
@@ -244,8 +258,9 @@ async def patch_config(body: ConfigPatch, request: Request) -> dict:
         raise _err(422, "invalid_settings", "no setting was changed", errors=errors)
     # Settings that run host code or touch arbitrary paths: a managed key's admin scope is
     # not host access. The owner (static token, or no auth configured) already runs the host.
-    _owner = getattr(getattr(request, "state", None), "role", None) == "owner"
-    if not _owner and not settings.get_bool("YUNSHU_ADMIN_WRITE_EXEC_SETTINGS"):
+    if not is_owner(request) and not settings.get_bool(
+        "YUNSHU_ADMIN_WRITE_EXEC_SETTINGS"
+    ):
         locked = sorted(
             n
             for n, v in clean.items()
